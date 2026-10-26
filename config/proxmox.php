@@ -28,6 +28,10 @@ return [
     |   # and never in a publicly reachable environment.
     |   PROXMOX_VERIFY_TLS=true
     |
+    |   # Optional SPKI pin (sha256//<base64>, ';'-separated for several).
+    |   # Enforced by curl even when PROXMOX_VERIFY_TLS=false (self-signed node).
+    |   PROXMOX_PINNED_PUBLIC_KEY=
+    |
     |   PROXMOX_TIMEOUT=10             # Total request timeout in seconds
     |
     */
@@ -45,6 +49,7 @@ return [
             'token_secret' => env('PROXMOX_TOKEN_SECRET'),
             'verify_tls'   => (bool) env('PROXMOX_VERIFY_TLS', true),
             'timeout'      => (int) env('PROXMOX_TIMEOUT', 10),
+            'pinned_public_key' => env('PROXMOX_PINNED_PUBLIC_KEY'),
         ],
     ],
 ];

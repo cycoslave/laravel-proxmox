@@ -3,7 +3,9 @@
 namespace Cycoslave\Proxmox;
 
 use Exception;
+use Illuminate\Support\Facades\Log;
 use Cycoslave\Proxmox\Support\ResponseHelper;
+use Cycoslave\Proxmox\Support\LogRedactor;
 use Cycoslave\Proxmox\Traits\ValidatesPathSegments;
 
 class ProxmoxNode
@@ -11,6 +13,24 @@ class ProxmoxNode
     use ValidatesPathSegments;
 
     public function __construct(protected ProxmoxAccess $client) {}
+
+    /**
+     * SAST-006 (CWE-209): $e->getMessage() on a network/API exception can
+     * carry curl diagnostics (resolved IPs, hostnames, local file paths).
+     * Returns a generic, caller-safe message for the response envelope /
+     * thrown exception.
+     *
+     * LPX-006 (CWE-532): the raw message is no longer logged either — only
+     * a categorised, redacted context (see LogRedactor::exceptionContext()).
+     * The original exception stays reachable via `previous` for callers
+     * that rethrow.
+     */
+    private function safeErrorMessage(\Throwable $e, string $context): string
+    {
+        Log::warning("Proxmox: {$context}", LogRedactor::exceptionContext($e));
+
+        return "{$context}.";
+    }
 
     /**
      * API version details, including some parts of the global datacenter config.
@@ -73,7 +93,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/apt/update", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'apt update fail!');
         }
 
@@ -129,7 +149,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/apt/update", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create update fail!');
         }
 
@@ -184,9 +204,10 @@ class ProxmoxNode
     public function setCephFlags(string $node, $flag, array $data): array
     {
         $this->validateSegment($node, 'node');
+        $this->validateSegment((string) $flag, 'flag');
         $response = $this->client->post("nodes/$node/ceph/flags/$flag", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set a ceph flag fail!');
         }
 
@@ -206,7 +227,7 @@ class ProxmoxNode
         $this->validateSegment((string) $flag, 'flag');
         $response = $this->client->delete("nodes/$node/ceph/flags/$flag");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Unset ceph flag fail!');
         }
 
@@ -226,7 +247,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/ceph/mgr", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create Ceph Manager fail!');
         }
 
@@ -246,7 +267,7 @@ class ProxmoxNode
         $this->validateSegment($id, 'id');
         $response = $this->client->delete("nodes/$node/ceph/mgr/$id");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create Ceph Manager fail!');
         }
 
@@ -284,7 +305,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/ceph/mon", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create Ceph Monitor and Manager fail!');
         }
 
@@ -302,9 +323,11 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($monid, 'monid');
-        $response = $this->client->delete("nodes/$node/ceph/mgr/$monid");
+        // LPX-002 (CWE-706): was routed to ceph/mgr/{id} — a monitor delete
+        // must never hit the manager endpoint.
+        $response = $this->client->delete("nodes/$node/ceph/mon/$monid");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Destroy Ceph Monitor and Manager fail!');
         }
 
@@ -342,7 +365,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/ceph/osd", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create OSD fail!');
         }
 
@@ -362,7 +385,7 @@ class ProxmoxNode
         $this->validateSegment($osdid, 'osdid');
         $response = $this->client->delete("nodes/$node/ceph/osd/$osdid");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Destroy OSD fail!');
         }
 
@@ -383,7 +406,7 @@ class ProxmoxNode
         $this->validateSegment($osdid, 'osdid');
         $response = $this->client->post("nodes/$node/ceph/osd/$osdid/in", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'ceph OSD in fail!');
         }
 
@@ -404,7 +427,7 @@ class ProxmoxNode
         $this->validateSegment($osdid, 'osdid');
         $response = $this->client->post("nodes/$node/ceph/osd/$osdid/out", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'ceph OSD out fail!');
         }
 
@@ -442,7 +465,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/ceph/pools", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create POOL fail!');
         }
 
@@ -460,7 +483,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/ceph/pools");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Destroy POOL fail!');
         }
 
@@ -534,7 +557,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/ceph/init", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create initial ceph fail!');
         }
 
@@ -549,7 +572,7 @@ class ProxmoxNode
      * @param integer|null $start
      * @throws Exception
      */
-    public function cephLog(string $node, int $limit = null, int $start = null): array
+    public function cephLog(string $node, ?int $limit = null, ?int $start = null): array
     {
         $optional['limit'] = !empty($limit) ? $limit : 50;
         $optional['start'] = !empty($start) ? $start : 0;
@@ -595,7 +618,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/ceph/start", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Start ceph services fail!');
         }
 
@@ -615,7 +638,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/ceph/stop", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Stop ceph services fail!');
         }
 
@@ -671,7 +694,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/disks", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Initialize Disk with GPT fail!');
         }
 
@@ -703,7 +726,7 @@ class ProxmoxNode
      * @param string|null $disk Block device name
      * @throws Exception
      */
-    public function disksSmart(string $node, string $disk = null): array
+    public function disksSmart(string $node, ?string $disk = null): array
     {
         $optional['disk'] = !empty($disk) ? $disk : null;
 
@@ -765,7 +788,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/firewall/rules", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create new rule fail!');
         }
 
@@ -804,7 +827,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/firewall/rules/$pos", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Modify rule data fail!');
         }
 
@@ -823,7 +846,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/firewall/rules/$pos");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Delete rule fail!');
         }
 
@@ -850,14 +873,17 @@ class ProxmoxNode
 
     /**
      * Get host firewall options.
-     * GET /api2/json/nodes/{node}/firewall/rules/options
+     * GET /api2/json/nodes/{node}/firewall/options
      * @param string $node The cluster node name.
      * @throws Exception
      */
     public function firewallRulesOptions(string $node): array
     {
         $this->validateSegment($node, 'node');
-        $response = $this->client->get("nodes/$node/firewall/rules/options");
+        // LPX-001: the Proxmox host-firewall options resource is
+        // nodes/{node}/firewall/options; "firewall/rules/options" would be
+        // parsed as rule position "options" and rejected.
+        $response = $this->client->get("nodes/$node/firewall/options");
 
         if (!isset($response['data'])) {
             return ResponseHelper::generate(false, 'Get host firewall options fail!');
@@ -867,8 +893,8 @@ class ProxmoxNode
     }
 
     /**
-     * Set Firewall options.
-     * PUT /api2/json/nodes/{node}/firewall/rules/options
+     * Set host (node-scoped) firewall options.
+     * PUT /api2/json/nodes/{node}/firewall/options
      * @param string $node The cluster node name.
      * @param array $data
      * @return array
@@ -876,9 +902,13 @@ class ProxmoxNode
      */
     public function setFirewallRuleOptions(string $node, array $data): array
     {
-        $response = $this->client->put("cluster/firewall/options", $data);
+        // LPX-001 (CWE-706): previously sent to cluster/firewall/options,
+        // changing the firewall policy of the WHOLE cluster instead of the
+        // one node the caller named. Always node-scoped now.
+        $this->validateSegment($node, 'node');
+        $response = $this->client->put("nodes/$node/firewall/options", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set firewall options fail!');
         }
 
@@ -895,7 +925,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/firewall/rules", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Created Firewall', $response['data']);
         }
         return ResponseHelper::generate(false, 'Create Firewall fail!');
@@ -928,7 +958,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/rules/$pos");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Removed Firewall', $response['data']);
         }
         return ResponseHelper::generate(false, 'Remove Firewall fail!');
@@ -964,7 +994,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create or restore a container fail!');
         }
 
@@ -1002,7 +1032,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/lxc/$vmid");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Destroy the container fail!');
         }
 
@@ -1061,7 +1091,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/firewall/aliases", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create IP or Network Alias fail!');
         }
 
@@ -1104,7 +1134,7 @@ class ProxmoxNode
         $this->validateSegment($name, 'name');
         $response = $this->client->put("nodes/$node/lxc/$vmid/firewall/aliases/$name", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Update IP or Network alias fail!');
         }
 
@@ -1125,7 +1155,7 @@ class ProxmoxNode
         $this->validateSegment($name, 'name');
         $response = $this->client->delete("nodes/$node/lxc/$vmid/firewall/aliases/$name");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Remove IP or Network alias fail!');
         }
 
@@ -1164,7 +1194,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/firewall/ipset", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create new IPSet fail!');
         }
 
@@ -1207,7 +1237,7 @@ class ProxmoxNode
         $this->validateSegment($name, 'name');
         $response = $this->client->post("nodes/$node/lxc/$vmid/firewall/ipset/$name", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Add IP or Network to IPSet fail!');
         }
 
@@ -1228,7 +1258,7 @@ class ProxmoxNode
         $this->validateSegment($name, 'name');
         $response = $this->client->delete("/nodes/$node/lxc/$vmid/firewall/ipset/$name");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Delete IPSet fail!');
         }
 
@@ -1275,7 +1305,7 @@ class ProxmoxNode
         $this->validateSegment($cidr, 'cidr');
         $response = $this->client->put("nodes/$node/lxc/$vmid/firewall/ipset/$name/$cidr", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Update IP or Network settings fail!');
         }
 
@@ -1298,7 +1328,7 @@ class ProxmoxNode
         $this->validateSegment($cidr, 'cidr');
         $response = $this->client->delete("nodes/$node/lxc/$vmid/firewall/ipset/$name/$cidr");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Remove IP or Network settings fail!');
         }
 
@@ -1337,7 +1367,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("/nodes/$node/lxc/$vmid/firewall/rules", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create new rule fail!');
         }
 
@@ -1376,7 +1406,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/lxc/$vmid/firewall/rules/$pos", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Modify rule data fail!');
         }
 
@@ -1395,7 +1425,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("/nodes/$node/lxc/$vmid/firewall/rules/$pos");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Delete rule fail!');
         }
 
@@ -1411,7 +1441,7 @@ class ProxmoxNode
      * @param integer|null $start
      * @throws Exception
      */
-    public function lxcFirewallLog(string $node, int $vmid, int $limit = null, int $start = null): array
+    public function lxcFirewallLog(string $node, int $vmid, ?int $limit = null, ?int $start = null): array
     {
         $optional['limit'] = !empty($limit) ? $limit : 50;
         $optional['start'] = !empty($start) ? $start : 0;
@@ -1458,7 +1488,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("/nodes/$node/lxc/$vmid/firewall/options", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set VM firewall options fail!');
         }
 
@@ -1497,7 +1527,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/snapshot", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Snapshot a container fail!');
         }
 
@@ -1539,7 +1569,7 @@ class ProxmoxNode
         $this->validateSegment($snapname, 'snapname');
         $response = $this->client->delete("nodes/$node/lxc/$vmid/snapshot/$snapname");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'List all snapshots fail!');
         }
 
@@ -1582,7 +1612,7 @@ class ProxmoxNode
         $this->validateSegment($snapname, 'snapname');
         $response = $this->client->put("/nodes/$node/lxc/$vmid/snapshot/$snapname/config", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Update snapshot metadata fail!');
         }
 
@@ -1604,7 +1634,7 @@ class ProxmoxNode
         $this->validateSegment($snapname, 'snapname');
         $response = $this->client->post("nodes/$node/lxc/$vmid/snapshot/$snapname/rollback", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Update snapshot metadata fail!');
         }
 
@@ -1662,7 +1692,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/status/resume", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Resume the container fail!');
         }
 
@@ -1682,7 +1712,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("/nodes/$node/lxc/$vmid/status/shutdown", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Shutdown the container fail!');
         }
 
@@ -1702,7 +1732,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/status/start", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Start the container fail!');
         }
 
@@ -1722,7 +1752,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/status/stop", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Stop the container fail!');
         }
 
@@ -1741,7 +1771,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/status/suspend", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Suspend the container fail!');
         }
 
@@ -1761,7 +1791,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/status/reboot", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Reboot the container fail!');
         }
 
@@ -1781,7 +1811,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("/nodes/$node/lxc/$vmid/clone", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create a container clone fail!');
         }
 
@@ -1820,7 +1850,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/lxc/$vmid/config", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set container configuration fail!');
         }
 
@@ -1859,7 +1889,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/migrate", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Migrate the container to another node. Creates a new migration task fail!');
         }
 
@@ -1879,7 +1909,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("/nodes/$node/lxc/$vmid/resize", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Resize a container mount point fail!');
         }
 
@@ -1895,7 +1925,7 @@ class ProxmoxNode
      * @param enum $timeframe Specify the time frame you are interested in.
      * @throws Exception
      */
-    public function lxcRrd(string $node, int $vmid, string $ds = null, $timeframe = null): array
+    public function lxcRrd(string $node, int $vmid, ?string $ds = null, $timeframe = null): array
     {
         $optional['ds'] = !empty($ds) ? $ds : null;
         $optional['timeframe'] = !empty($timeframe) ? $timeframe : null;
@@ -1945,7 +1975,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("/nodes/$node/lxc/$vmid/spiceproxy", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Read VM RRD Data statistics fail!');
         }
 
@@ -1965,7 +1995,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("/nodes/$node/lxc/$vmid/template", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create a Template fail!');
         }
 
@@ -1985,7 +2015,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc/$vmid/vncproxy", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Creates a TCP VNC proxy connections fail!');
         }
 
@@ -2001,7 +2031,7 @@ class ProxmoxNode
      * @param string|null $vncticket Ticket from previous call to vncproxy.
      * @throws Exception
      */
-    public function lxcVncwebsocket(string $node, int $vmid, int $port = null, string $vncticket = null): array
+    public function lxcVncwebsocket(string $node, int $vmid, ?int $port = null, ?string $vncticket = null): array
     {
         $optional['port'] = !empty($port) ? $port : null;
         $optional['vncticket'] = !empty($vncticket) ? $vncticket : null;
@@ -2048,7 +2078,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/network", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create network device configuration fail!');
         }
 
@@ -2066,7 +2096,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/network");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Revert network configuration changes fail!');
         }
 
@@ -2107,7 +2137,7 @@ class ProxmoxNode
         $this->validateSegment($iface, 'iface');
         $response = $this->client->put("/nodes/$node/network/$iface", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Update network device configuration fail!');
         }
 
@@ -2127,7 +2157,7 @@ class ProxmoxNode
         $this->validateSegment($iface, 'iface');
         $response = $this->client->delete("/nodes/$node/network/$iface");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Delete network device configuration fail!');
         }
 
@@ -2164,7 +2194,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create or restore a virtual machine fail!');
         }
 
@@ -2203,11 +2233,11 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/qemu/$vmid", $data);
 
-        if (array_key_exists('data', $response) && is_null($response['data'])) {
+        if (ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Delete vm successfully', $response['data']);
         }
 
-        return ResponseHelper::generate(false, 'Delete fail!', $response['data']);
+        return ResponseHelper::generate(false, 'Delete fail!');
     }
 
     /**
@@ -2259,7 +2289,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/firewall/aliases", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create IP or Network Alias fail!');
         }
         return ResponseHelper::generate(true, 'Created IP or Network Alias!', $response['data']);
@@ -2300,7 +2330,7 @@ class ProxmoxNode
         $this->validateSegment($name, 'name');
         $response = $this->client->put("nodes/$node/qemu/$vmid/firewall/aliases/$name", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Read Alias fail!');
         }
         return ResponseHelper::generate(true, 'Read Alias!', $response['data']);
@@ -2318,9 +2348,9 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/aliases/$name", null);
+        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/aliases/$name");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Remove IP or Network fail!');
         }
         return ResponseHelper::generate(true, 'Removed IP or Network!', $response['data']);
@@ -2357,7 +2387,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/firewall/ipset", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'List IPSets fail!');
         }
         return ResponseHelper::generate(true, 'List IPSets!', $response['data']);
@@ -2398,7 +2428,7 @@ class ProxmoxNode
         $this->validateSegment($name, 'name');
         $response = $this->client->post("nodes/$node/qemu/$vmid/firewall/ipset/$name", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Add IP or Network fail!');
         }
         return ResponseHelper::generate(true, 'Add IP or Network!', $response['data']);
@@ -2416,13 +2446,13 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/ipset/$name", null);
+        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/ipset/$name");
 
-        if (array_key_exists('data', $response) && is_null($response['data'])) {
+        if (ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Delete successfully', $response['data']);
         }
 
-        return ResponseHelper::generate(false, 'Delete fail!', $response['data']);
+        return ResponseHelper::generate(false, 'Delete fail!');
     }
 
     /**
@@ -2464,7 +2494,7 @@ class ProxmoxNode
         $this->validateSegment($cidr, 'cidr');
         $response = $this->client->put("nodes/$node/qemu/$vmid/firewall/ipset/$name/$cidr", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Update IP or Network fail!');
         }
         return ResponseHelper::generate(true, 'Update IP or Network!', $response['data']);
@@ -2484,13 +2514,13 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
         $this->validateSegment($cidr, 'cidr');
-        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/ipset/$name/$cidr", null);
+        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/ipset/$name/$cidr");
 
-        if (array_key_exists('data', $response) && is_null($response['data'])) {
+        if (ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Delete successfully', $response['data']);
         }
 
-        return ResponseHelper::generate(false, 'Delete fail!', $response['data']);
+        return ResponseHelper::generate(false, 'Delete fail!');
     }
 
     /**
@@ -2524,7 +2554,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/firewall/rules", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create new rule fail!');
         }
         return ResponseHelper::generate(true, 'Create new rule!', $response['data']);
@@ -2561,7 +2591,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/qemu/$vmid/firewall/rules/$pos", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Modify rule fail!');
         }
         return ResponseHelper::generate(true, 'Modify rule!', $response['data']);
@@ -2577,13 +2607,13 @@ class ProxmoxNode
     public function deleteQemuFirewallRulesPos(string $node, int $vmid, int $pos): array
     {
         $this->validateSegment($node, 'node');
-        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/rules/$pos", null);
+        $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/rules/$pos");
 
-        if (array_key_exists('data', $response) && is_null($response['data'])) {
+        if (ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Delete successfully', $response['data']);
         }
 
-        return ResponseHelper::generate(false, 'Delete fail!', $response['data']);
+        return ResponseHelper::generate(false, 'Delete fail!');
     }
 
     /**
@@ -2594,7 +2624,7 @@ class ProxmoxNode
      * @param integer|null $limit
      * @param integer|null $start
      */
-    public function qemuFirewallLog(string $node, int $vmid, int $limit = null, int $start = null): array
+    public function qemuFirewallLog(string $node, int $vmid, ?int $limit = null, ?int $start = null): array
     {
         $optional['limit'] = !empty($limit) ? $limit : 50;
         $optional['start'] = !empty($start) ? $start : 0;
@@ -2639,7 +2669,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("/nodes/$node/qemu/$vmid/firewall/options", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set firewall options fail!');
         }
         return ResponseHelper::generate(true, 'Set firewall options!', $response['data']);
@@ -2694,7 +2724,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/snapshot", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Snapshot a VM fail!');
         }
         return ResponseHelper::generate(true, 'Snapshot a VM!', $response['data']);
@@ -2734,7 +2764,7 @@ class ProxmoxNode
         $this->validateSegment($snapname, 'snapname');
         $response = $this->client->delete("nodes/$node/qemu/$vmid/snapshot/$snapname");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Delete fail!');
         }
         return ResponseHelper::generate(true, 'Delete Successfully!', $response['data']);
@@ -2775,7 +2805,7 @@ class ProxmoxNode
         $this->validateSegment($snapname, 'snapname');
         $response = $this->client->put("/nodes/$node/qemu/$vmid/snapshot/$snapname/config", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Update snapshot metadata fail!');
         }
         return ResponseHelper::generate(true, 'Update snapshot metadata Successfully!', $response['data']);
@@ -2796,7 +2826,7 @@ class ProxmoxNode
         $this->validateSegment($snapname, 'snapname');
         $response = $this->client->post("nodes/$node/qemu/$vmid/snapshot/$snapname/rollback", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Rollback snapshot fail!');
         }
         return ResponseHelper::generate(true, 'Rollback snapshot successfully!', $response['data']);
@@ -2851,7 +2881,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/resume", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Resume virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Resume virtual machine!', $response['data']);
@@ -2870,7 +2900,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/reset", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Reset virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Reset virtual machine!', $response['data']);
@@ -2889,7 +2919,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/shutdown", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Shutdown virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Shutdown virtual machine!', $response['data']);
@@ -2908,7 +2938,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/start", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Started virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Started virtual machine!', $response['data']);
@@ -2927,7 +2957,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/stop", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Stop virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Stop virtual machine!', $response['data']);
@@ -2946,7 +2976,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/reboot", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Reboot virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Reboot virtual machine!', $response['data']);
@@ -2965,7 +2995,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/suspend", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Reboot virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Reboot virtual machine!', $response['data']);
@@ -2984,7 +3014,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/status/agent", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Execute Qemu Guest Agent commands fail!');
         }
         return ResponseHelper::generate(true, 'Executed Qemu Guest Agent commands!', $response['data']);
@@ -3003,7 +3033,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/agent/exec", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Execute command via Qemu Guest Agent fail!');
         }
         return ResponseHelper::generate(true, 'Executed command via Qemu Guest Agent!', $response['data']);
@@ -3021,7 +3051,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/agent/set-user-password", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Change user password fail!');
         }
         return ResponseHelper::generate(true, 'Changed user password!', $response['data']);
@@ -3040,7 +3070,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/clone", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Create a copy of virtual machine/template fail!');
         }
         return ResponseHelper::generate(true, 'Created a copy of virtual machine/template!', $response['data']);
@@ -3077,7 +3107,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/config", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set virtual machine configuration fail!');
         }
         return ResponseHelper::generate(true, 'Set virtual machine configuration!', $response['data']);
@@ -3095,7 +3125,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/qemu/$vmid/config", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set virtual machine options fail!');
         }
         return ResponseHelper::generate(true, 'Set virtual machine options!', $response['data']);
@@ -3132,7 +3162,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/migrate", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Migrate virtual machine fail!');
         }
         return ResponseHelper::generate(true, 'Migrate virtual machine!', $response['data']);
@@ -3151,7 +3181,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/monitor", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Execute Qemu monitor commands fail!');
         }
         return ResponseHelper::generate(true, 'Executed Qemu monitor commands!', $response['data']);
@@ -3170,7 +3200,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/move_disk", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Move volume to different storage fail!');
         }
         return ResponseHelper::generate(true, 'Moved volume to different storage!', $response['data']);
@@ -3207,7 +3237,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/qemu/$vmid/resize", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Extend volume size fail!');
         }
         return ResponseHelper::generate(true, 'Extended volume size!', $response['data']);
@@ -3222,7 +3252,7 @@ class ProxmoxNode
      * @param enum $timeframe Specify the time frame you are interested in.
      * @throws Exception
      */
-    public function qemuRrd(string $node, int $vmid, string $ds = null, $timeframe = null): array
+    public function qemuRrd(string $node, int $vmid, ?string $ds = null, $timeframe = null): array
     {
         $optional['ds'] = !empty($ds) ? $ds : null;
         $optional['timeframe'] = !empty($timeframe) ? $timeframe : null;
@@ -3270,7 +3300,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/qemu/$vmid/sendkey", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Read VM RRD statistics fail!');
         }
         return ResponseHelper::generate(true, 'Read VM RRD statistics!', $response['data']);
@@ -3289,7 +3319,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/spiceproxy", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Returns a SPICE configuration fail!');
         }
         return ResponseHelper::generate(true, 'Returns a SPICE configuration!', $response['data']);
@@ -3308,7 +3338,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/template", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Returns a SPICE configuration fail!');
         }
         return ResponseHelper::generate(true, 'Returns a SPICE configuration!', $response['data']);
@@ -3327,7 +3357,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("/nodes/$node/qemu/$vmid/unlink", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Unlink/delete disk images fail!');
         }
         return ResponseHelper::generate(true, 'Unlink/delete disk images!', $response['data']);
@@ -3346,7 +3376,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/vncproxy", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Unlink/delete disk images fail!');
         }
         return ResponseHelper::generate(true, 'Unlink/delete disk images!', $response['data']);
@@ -3360,7 +3390,7 @@ class ProxmoxNode
      * @param integer|null $port Port number returned by previous vncproxy call.
      * @param string|null $vncticket Ticket from previous call to vncproxy.
      */
-    public function qemuVncwebsocket(string $node, int $vmid, int $port = null, string $vncticket = null): array
+    public function qemuVncwebsocket(string $node, int $vmid, ?int $port = null, ?string $vncticket = null): array
     {
         $optional['port'] = !empty($port) ? $port : null;
         $optional['vncticket'] = !empty($vncticket) ? $vncticket : null;
@@ -3447,7 +3477,7 @@ class ProxmoxNode
         $this->validateSegment($id, 'id');
         $response = $this->client->post("nodes/$node/replication/$id/schedule_now", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Schedule replication job to start as soon as possible fail!');
         }
 
@@ -3628,6 +3658,7 @@ class ProxmoxNode
     public function listService(string $node, $service): array
     {
         $this->validateSegment($node, 'node');
+        $this->validateSegment((string) $service, 'service');
         $response = $this->client->get("nodes/$node/services/$service");
 
         if (!isset($response['data'])) {
@@ -3651,7 +3682,7 @@ class ProxmoxNode
         $this->validateSegment($service, 'service');
         $response = $this->client->post("nodes/$node/services/$service/reload", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Reload service fail!');
         }
 
@@ -3672,7 +3703,7 @@ class ProxmoxNode
         $this->validateSegment($service, 'service');
         $response = $this->client->post("nodes/$node/services/$service/restart", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Restart service fail!');
         }
 
@@ -3693,7 +3724,7 @@ class ProxmoxNode
         $this->validateSegment($service, 'service');
         $response = $this->client->post("nodes/$node/services/$service/start", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Start service fail!');
         }
 
@@ -3714,7 +3745,7 @@ class ProxmoxNode
         $this->validateSegment($service, 'service');
         $response = $this->client->post("nodes/$node/services/$service/stop", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Stop service fail!');
         }
 
@@ -3751,7 +3782,7 @@ class ProxmoxNode
      * @param boolean|null $enabled Only list stores which are enabled (not disabled in config).
      * @throws Exception
      */
-    public function storage(string $node, string $content = null, string $storage = null, string $target = null, bool $enabled = null): array
+    public function storage(string $node, ?string $content = null, ?string $storage = null, ?string $target = null, ?bool $enabled = null): array
     {
         $optional['content'] = !empty($content) ? $content : null;
         $optional['storage'] = !empty($storage) ? $storage : null;
@@ -3822,7 +3853,7 @@ class ProxmoxNode
         $this->validateSegment($storage, 'storage');
         $response = $this->client->post("nodes/$node/storage/$storage/content", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Allocate disk images fail!');
         }
 
@@ -3865,7 +3896,7 @@ class ProxmoxNode
         $this->validateSegment($volume, 'volume');
         $response = $this->client->post("nodes/$node/storage/$storage/content/$volume", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Copy a volume fail!');
         }
 
@@ -3886,7 +3917,7 @@ class ProxmoxNode
         $this->validateSegment($volume, 'volume');
         $response = $this->client->delete("nodes/$node/storage/$storage/content/$volume");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Delete a volume fail!');
         }
 
@@ -3980,7 +4011,7 @@ class ProxmoxNode
      * @param integer|null $start
      * @throws Exception
      */
-    public function tasks(string $node, bool $errors = null, int $limit = null, int $vmid = null, int $start = null): array
+    public function tasks(string $node, ?bool $errors = null, ?int $limit = null, ?int $vmid = null, ?int $start = null): array
     {
         $optional['errors']  = !empty($errors) ? $errors : false;
         $optional['limit']   = !empty($limit) ? $limit : null;
@@ -4030,11 +4061,11 @@ class ProxmoxNode
         $this->validateSegment($upid, 'upid');
         $response = $this->client->delete("nodes/$node/tasks/$upid");
 
-        if (array_key_exists('data', $response) && is_null($response['data'])) {
+        if (ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Stop a task successfully', $response['data']);
         }
 
-        return ResponseHelper::generate(false, 'Stop a task fail!', $response['data']);
+        return ResponseHelper::generate(false, 'Stop a task fail!');
     }
 
     /**
@@ -4046,7 +4077,7 @@ class ProxmoxNode
      * @param integer $start
      * @throws Exception
      */
-    public function tasksLog(string $node, string $upid, int $limit = null, int $start = null): array
+    public function tasksLog(string $node, string $upid, ?int $limit = null, ?int $start = null): array
     {
         $optional['limit']   = !empty($limit) ? $limit : null;
         $optional['start']   = !empty($start) ? $start : null;
@@ -4092,7 +4123,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/vzdump", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Read task status fail!');
         }
         return ResponseHelper::generate(true, 'Read task status log!', $response['data']);
@@ -4184,7 +4215,7 @@ class ProxmoxNode
         // Create VM and get response
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu", $params);
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM create fail!');
         }
 
@@ -4217,7 +4248,7 @@ class ProxmoxNode
 
         $response = $this->client->post('storage', $params);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'storage create fail!');
         }
         return ResponseHelper::generate(true, 'storage created!', $response['data']);
@@ -4303,7 +4334,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/start");
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM start fail!');
         }
 
@@ -4328,7 +4359,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/stop");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM stop fail!');
         }
 
@@ -4352,7 +4383,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/reset");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM reset fail!');
         }
 
@@ -4402,7 +4433,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/reboot");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM reboot fail!');
         }
 
@@ -4427,7 +4458,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/shutdown");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM shutdown fail!');
         }
 
@@ -4452,7 +4483,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/resume");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM resume fail!');
         }
 
@@ -4477,7 +4508,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/suspend");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'VM suspend fail!');
         }
 
@@ -4530,7 +4561,7 @@ class ProxmoxNode
             return ResponseHelper::generate(false, 'Failed to rename VM.', $result['data'] ?? null);
 
         } catch (Exception $e) {
-            return ResponseHelper::generate(false, $e->getMessage());
+            return ResponseHelper::generate(false, $this->safeErrorMessage($e, 'Failed to rename VM'));
         }
     }
 
@@ -4589,7 +4620,7 @@ class ProxmoxNode
             ];
 
         } catch (Exception $e) {
-            throw new Exception("Failed to fix guest agent: " . $e->getMessage());
+            throw new Exception($this->safeErrorMessage($e, 'Failed to fix guest agent'), previous: $e);
         }
     }
 
@@ -4626,7 +4657,7 @@ class ProxmoxNode
             ];
 
         } catch (Exception $e) {
-            throw new Exception("Failed to get agent status: " . $e->getMessage());
+            throw new Exception($this->safeErrorMessage($e, 'Failed to get agent status'), previous: $e);
         }
     }
 
@@ -4652,7 +4683,7 @@ class ProxmoxNode
             ];
 
         } catch (Exception $e) {
-            throw new Exception("Failed to enable guest agent: " . $e->getMessage());
+            throw new Exception($this->safeErrorMessage($e, 'Failed to enable guest agent'), previous: $e);
         }
     }
 
@@ -4691,7 +4722,7 @@ class ProxmoxNode
             ];
 
         } catch (Exception $e) {
-            throw new Exception("Failed to configure guest agent: " . $e->getMessage());
+            throw new Exception($this->safeErrorMessage($e, 'Failed to configure guest agent'), previous: $e);
         }
     }
 
@@ -4721,7 +4752,7 @@ class ProxmoxNode
             ];
 
         } catch (Exception $e) {
-            throw new Exception("Failed to check guest agent status: " . $e->getMessage());
+            throw new Exception($this->safeErrorMessage($e, 'Failed to check guest agent status'), previous: $e);
         }
     }
 
@@ -4768,7 +4799,7 @@ class ProxmoxNode
             ];
 
         } catch (Exception $e) {
-            throw new Exception("Failed to configure network: " . $e->getMessage());
+            throw new Exception($this->safeErrorMessage($e, 'Failed to configure network'), previous: $e);
         }
     }
 
@@ -4782,10 +4813,13 @@ class ProxmoxNode
             'ciuser' => $user,
             'cipassword' => $password
         ]);
-        
+
+        // LPX-004: Proxmox returns {"data": null} on success here.
+        $ok = ResponseHelper::hasData($response);
+
         return ResponseHelper::generate(
-            isset($response['data']), 
-            isset($response['data']) ? 'SSH credentials injected successfully' : 'SSH credentials failed to inject!', 
+            $ok,
+            $ok ? 'SSH credentials injected successfully' : 'SSH credentials failed to inject!',
             $response['data'] ?? null
         );
     }
@@ -4831,7 +4865,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$templateId}/clone", $params);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Failed to create VM!');
         }
 
@@ -4920,7 +4954,7 @@ class ProxmoxNode
             // Apply configuration
             $result = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", $diskParams);
 
-            if (!isset($result['data'])) {
+            if (!ResponseHelper::hasData($result)) {
                 return ResponseHelper::generate(false, "Failed to attach disk: No response data received");
             }
 
@@ -4933,7 +4967,7 @@ class ProxmoxNode
             return ResponseHelper::generate(true, 'Disk attach success', $successResponse);
 
         } catch (Exception $e) {
-            return ResponseHelper::generate(false, "Failed to attach disk: " . $e->getMessage());
+            return ResponseHelper::generate(false, $this->safeErrorMessage($e, 'Failed to attach disk'));
         }
     }
 
@@ -4950,7 +4984,7 @@ class ProxmoxNode
                 'force' => $type
             ]);
 
-            if (!isset($result['data'])) {
+            if (!ResponseHelper::hasData($result)) {
                 return ResponseHelper::generate(false, "Failed to detach disk");
             }
 
@@ -4963,48 +4997,232 @@ class ProxmoxNode
 
             return ResponseHelper::generate(true, 'Disk attach success', $successResponse);
         } catch (Exception $e) {
-            return ResponseHelper::generate(false, "Failed to detach disk: " . $e->getMessage());
+            return ResponseHelper::generate(false, $this->safeErrorMessage($e, 'Failed to detach disk'));
         }
     }
 
     /**
      * Generate SSH Key Pair
      *
-     * @param string $keyName Name for the key files
-     * @param string $keyPath Path to store keys (default: storage/app/ssh)
-     * @param string $type Key type (rsa, ed25519)
-     * @param int $bits Key bits for RSA
-     * @return array
+     * SAST-001 remediation: key material is generated entirely in-process
+     * via ext-openssl (no shell exec, no OS-command sink). The private key
+     * is written, passphrase-encrypted, under a fixed storage root that is
+     * never influenced by caller input (CWE-73/CWE-78 fix); the private key
+     * content is never included in the response envelope (CWE-522); the
+     * encryption passphrase is caller-supplied or, when omitted, a fresh
+     * cryptographically random value (CWE-321/CWE-798 fix); every OpenSSL
+     * operation's result is checked and failures raise an Exception.
+     *
+     * @param  string|null  $name        Basename for the key files (sanitised). A random
+     *                                   name is generated when omitted. If a key pair with
+     *                                   the sanitised name already exists, an Exception is
+     *                                   thrown; existing keys are never overwritten (LPX-005).
+     * @param  string|null  $passphrase  Passphrase used to encrypt the private key. A
+     *                                   cryptographically random passphrase is generated
+     *                                   and returned when omitted.
+     * @return array{private_key_path:string,public_key_path:string,public_key:string,passphrase_generated:bool,passphrase?:string}
      * @throws Exception
      */
-    public function generateSSHKey(string $path, string $name)
+    public function generateSSHKey(?string $name = null, ?string $passphrase = null): array
     {
-        $safeName = preg_replace('/[^a-z0-9]+/i', '_', strtolower($name));
-        $keyPath = $path;
-        $keyName = $safeName;
-        $fullPath = "{$keyPath}/{$keyName}";
-        $escapedPath = escapeshellarg($fullPath);
-
-        // Ensure directory exists
-        if (!file_exists($keyPath)) {
-            mkdir($keyPath, 0700, true);
+        $safeName = $name !== null ? preg_replace('/[^a-z0-9]+/i', '_', strtolower($name)) : '';
+        if ($safeName === '') {
+            $safeName = 'key_' . bin2hex(random_bytes(8));
         }
 
-        // Execute ssh-keygen
-        exec("ssh-keygen -t rsa -b 2048 -f {$escapedPath} -N 'pass'");
+        $storageRoot = $this->sshKeyStorageRoot();
+        if (!is_dir($storageRoot) && !mkdir($storageRoot, 0700, true) && !is_dir($storageRoot)) {
+            throw new Exception("Unable to create SSH key storage directory: {$storageRoot}");
+        }
+        $this->assertSafeKeyStorageRoot($storageRoot);
+
+        $privateKeyPath = $storageRoot . DIRECTORY_SEPARATOR . $safeName;
+        $publicKeyPath  = $privateKeyPath . '.pub';
+
+        // LPX-005 (CWE-73): distinct names can sanitise to the same basename
+        // (e.g. "web 1" / "web-1"), and a repeated name maps to the same path.
+        // Fail closed instead of silently replacing an existing key pair.
+        // (Exclusive creation in writeNewKeyFile() closes the race window.)
+        foreach ([$privateKeyPath, $publicKeyPath] as $path) {
+            if (file_exists($path) || is_link($path)) {
+                throw new Exception(
+                    "SSH key '{$safeName}' already exists; refusing to overwrite an existing key pair. Choose a different name."
+                );
+            }
+        }
+
+        $passphraseGenerated = $passphrase === null;
+        $effectivePassphrase = $passphrase ?? base64_encode(random_bytes(24));
+
+        $resource = openssl_pkey_new([
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
+            'private_key_bits' => 2048,
+        ]);
+
+        if ($resource === false) {
+            throw new Exception('Failed to generate SSH key pair: ' . $this->opensslErrorSummary());
+        }
+
+        $exported = openssl_pkey_export($resource, $privateKeyPem, $effectivePassphrase);
+
+        if ($exported === false || !is_string($privateKeyPem) || $privateKeyPem === '') {
+            throw new Exception('Failed to export SSH private key: ' . $this->opensslErrorSummary());
+        }
+
+        $details = openssl_pkey_get_details($resource);
+
+        if ($details === false || !isset($details['rsa']['n'], $details['rsa']['e'])) {
+            throw new Exception('Failed to derive SSH public key: ' . $this->opensslErrorSummary());
+        }
+
+        $publicKeyLine = $this->encodeOpenSshRsaPublicKey($details['rsa']['n'], $details['rsa']['e'], $safeName);
+
+        $this->writeNewKeyFile($privateKeyPath, $privateKeyPem, 0600, $safeName);
+
+        try {
+            $this->writeNewKeyFile($publicKeyPath, $publicKeyLine . PHP_EOL, 0644, $safeName);
+        } catch (Exception $e) {
+            // Never leave a half-written pair behind; the private key file
+            // was created by this call, so removing it is safe.
+            @unlink($privateKeyPath);
+            throw $e;
+        }
 
         $response = [
-            'private_key_path' => $fullPath,
-            'private_key' => file_get_contents($fullPath),
-            'public_key_path' => $fullPath . '.pub',
-            'public_key' => file_get_contents($fullPath . '.pub')
+            'private_key_path'     => $privateKeyPath,
+            'public_key_path'      => $publicKeyPath,
+            'public_key'           => $publicKeyLine,
+            'passphrase_generated' => $passphraseGenerated,
         ];
 
-        // Clean up sensitive files from local disk
-        unlink($fullPath);
-        unlink($fullPath . '.pub');
+        // The private key itself is never returned. The passphrase is only
+        // surfaced when we generated it (the caller cannot otherwise learn
+        // it); a caller-supplied passphrase is already known to the caller.
+        if ($passphraseGenerated) {
+            $response['passphrase'] = $effectivePassphrase;
+        }
 
         return ResponseHelper::generate(true, 'SSH key generated successfully', $response);
+    }
+
+    /**
+     * Fixed, non-caller-controlled storage root for generated SSH key material.
+     *
+     * Prefers the host Laravel app's storage path when a booted application
+     * container is available; falls back to the system temp dir so the
+     * method also works outside a booted Laravel app (e.g. plain PHPUnit).
+     * Never derived from caller input.
+     */
+    private function sshKeyStorageRoot(): string
+    {
+        if (function_exists('app')) {
+            try {
+                $app = app();
+                if ($app instanceof \Illuminate\Contracts\Foundation\Application) {
+                    return rtrim($app->storagePath(), '/') . '/app/proxmox-ssh-keys';
+                }
+            } catch (\Throwable) {
+                // No booted container available — fall through to the temp-dir default.
+            }
+        }
+
+        return rtrim(sys_get_temp_dir(), '/') . '/proxmox-ssh-keys';
+    }
+
+    /**
+     * LPX-005: refuse to write key material into a storage root that is a
+     * symlink, is not owned by the current user, or is group/world-writable
+     * (any of which would let another principal swap or pre-plant files).
+     *
+     * @throws Exception
+     */
+    private function assertSafeKeyStorageRoot(string $storageRoot): void
+    {
+        clearstatcache(true, $storageRoot);
+
+        if (is_link($storageRoot) || !is_dir($storageRoot)) {
+            throw new Exception('SSH key storage directory is not a real directory; refusing to write key material.');
+        }
+
+        if (function_exists('posix_geteuid') && fileowner($storageRoot) !== posix_geteuid()) {
+            throw new Exception('SSH key storage directory is not owned by the current user; refusing to write key material.');
+        }
+
+        if ((fileperms($storageRoot) & 0022) !== 0) {
+            throw new Exception('SSH key storage directory is group/world-writable; refusing to write key material.');
+        }
+    }
+
+    /**
+     * LPX-005: create $path exclusively (O_CREAT|O_EXCL via fopen 'x', which
+     * also refuses an existing or dangling symlink) and write $contents.
+     * Never truncates an existing file.
+     *
+     * @throws Exception
+     */
+    private function writeNewKeyFile(string $path, string $contents, int $mode, string $keyName): void
+    {
+        $handle = @fopen($path, 'xb');
+        if ($handle === false) {
+            throw new Exception(
+                "SSH key '{$keyName}' already exists or cannot be created; refusing to overwrite an existing key pair."
+            );
+        }
+
+        try {
+            if (!chmod($path, $mode)) {
+                throw new Exception("Failed to set permissions on SSH key file for '{$keyName}'.");
+            }
+            if (fwrite($handle, $contents) !== strlen($contents) || !fflush($handle)) {
+                throw new Exception("Failed to write SSH key file for '{$keyName}'.");
+            }
+        } catch (Exception $e) {
+            fclose($handle);
+            @unlink($path);
+            throw $e;
+        }
+
+        fclose($handle);
+    }
+
+    private function opensslErrorSummary(): string
+    {
+        $messages = [];
+        while ($msg = openssl_error_string()) {
+            $messages[] = $msg;
+        }
+        return $messages === [] ? 'unknown OpenSSL error' : implode('; ', $messages);
+    }
+
+    /**
+     * Encode an RSA public key (raw modulus/exponent from openssl_pkey_get_details)
+     * into OpenSSH authorized_keys wire format: "ssh-rsa <base64> [comment]".
+     */
+    private function encodeOpenSshRsaPublicKey(string $modulus, string $exponent, string $comment = ''): string
+    {
+        $blob = $this->sshString('ssh-rsa') . $this->sshMpint($exponent) . $this->sshMpint($modulus);
+        $encoded = 'ssh-rsa ' . base64_encode($blob);
+
+        return $comment !== '' ? "{$encoded} {$comment}" : $encoded;
+    }
+
+    private function sshString(string $value): string
+    {
+        return pack('N', strlen($value)) . $value;
+    }
+
+    /**
+     * Encode a raw big-endian unsigned integer as an SSH "mpint": a length
+     * prefix followed by the bytes, with a leading 0x00 inserted when the
+     * high bit of the first byte is set (so it is not misread as negative).
+     */
+    private function sshMpint(string $binary): string
+    {
+        if ($binary !== '' && (ord($binary[0]) & 0x80) !== 0) {
+            $binary = "\x00" . $binary;
+        }
+
+        return $this->sshString($binary);
     }
 
     /**
@@ -5053,9 +5271,18 @@ class ProxmoxNode
     {
         // Generate new SSH key if none provided
         if ($sshKey === null) {
-            $keyName = $params['name'] ?? 'vm-' . time();
+            // LPX-005: generateSSHKey() now refuses to overwrite an existing
+            // key pair, so the auto-generated name gets a server-controlled
+            // random suffix — re-provisioning a VM with a reused name must
+            // neither clobber the earlier VM's keys nor fail.
+            $keyName = ($params['name'] ?? 'vm') . '-' . bin2hex(random_bytes(4));
             $sshKeyPair = $this->generateSSHKey($keyName);
-            $sshKey = file_get_contents($sshKeyPair['public_key_path']);
+
+            if (!($sshKeyPair['success'] ?? false) || !isset($sshKeyPair['data']['public_key'])) {
+                throw new Exception('Failed to generate SSH key for VM: ' . ($sshKeyPair['message'] ?? 'unknown error'));
+            }
+
+            $sshKey = $sshKeyPair['data']['public_key'];
         }
 
         // Add cloud-init specific defaults
@@ -5084,13 +5311,21 @@ class ProxmoxNode
 
     public function configureVMCloudInitNetwork(string $node, int $vmid, $ip, $gateway, $netmask)
     {
+        $this->validateSegment($node, 'node');
+
         $params = [
             "ipconfig0" => "ip={$ip}/{$netmask},gw={$gateway}"
         ];
 
         $response = $this->client->put("nodes/{$node}/qemu/{$vmid}/config", $params);
 
-        if (!isset($response['data'])) {
+        // SAST-007 (CWE-393): the previous `!isset($response['data'])` predicate
+        // reported success when the response carried NO data and failure when
+        // it DID — the exact opposite of every other call site in this class
+        // (e.g. deleteStorage()). Normalised to array_key_exists() so presence
+        // of the 'data' key (even null, which Proxmox returns for this
+        // endpoint on success) is what signals success.
+        if (array_key_exists('data', $response)) {
             $successResponse = [
                 'node' => $node,
                 'vmid' => $vmid,
@@ -5100,7 +5335,7 @@ class ProxmoxNode
             ];
             return ResponseHelper::generate(true, 'Network configured successfully', $successResponse);
         }
-        return ResponseHelper::generate(false, 'Network configure fail!', $response['data']);
+        return ResponseHelper::generate(false, 'Network configure fail!', $response['data'] ?? null);
     }
 
     /**
@@ -5111,7 +5346,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/{$node}/qemu/{$vmid}/config", $params);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             $successResponse = [
                 'node' => $node,
                 'vmid' => $vmid,
@@ -5134,7 +5369,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", $params);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             $successResponse = [
                 'node' => $node,
                 'vmid' => $vmid,
@@ -5178,7 +5413,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/qemu/$vmid", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Destroy the vm fail!', $response['data']);
         }
         return ResponseHelper::generate(true, 'Destroyed the vm', $response['data']);
@@ -5238,6 +5473,11 @@ class ProxmoxNode
 
         try {
             $response = $this->client->delete("nodes/$node/qemu/$vmid", $params);
+
+            if (!ResponseHelper::hasData($response)) {
+                return ResponseHelper::generate(false, "Failed to delete VM {$vmid}");
+            }
+
             $successResponse = [
                 'data' => $response['data'],
                 'node' => $node,
@@ -5245,7 +5485,7 @@ class ProxmoxNode
             ];
             return ResponseHelper::generate(true, 'VM Deleted successfully', $successResponse);
         } catch (Exception $e) {
-            return ResponseHelper::generate(false, "Failed to delete VM {$vmid}: " . $e->getMessage());
+            return ResponseHelper::generate(false, $this->safeErrorMessage($e, "Failed to delete VM {$vmid}"));
         }
     }
 
@@ -5267,7 +5507,7 @@ class ProxmoxNode
             try {
                 $results[$vmid] = $this->deleteVM($node, $vmid, $force, $purge);
             } catch (Exception $e) {
-                $errors[$vmid] = $e->getMessage();
+                $errors[$vmid] = $this->safeErrorMessage($e, "Failed to delete VM {$vmid}");
             }
         }
 
@@ -5286,19 +5526,20 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         try {
             $response = $this->client->post("/nodes/{$node}/qemu/{$vmid}/config", $params);
+
+            if (!ResponseHelper::hasData($response)) {
+                return ResponseHelper::generate(false, 'Failed to Update VM Credential Password!');
+            }
+
             $successResponse = [
                 'data' => $response['data'],
                 'node' => $node,
                 'vmid' => $vmid,
             ];
 
-            if (!isset($response['data'])) {
-                return ResponseHelper::generate(false, 'Failed to Update VM Credential Password!');
-            }
-
             return ResponseHelper::generate(true, 'VM Credential Password Updated successfully', $successResponse);
         } catch (\Exception $e) {
-            return ResponseHelper::generate(false, "Failed to Update VM Credential Password {$vmid}: " . $e->getMessage());
+            return ResponseHelper::generate(false, $this->safeErrorMessage($e, "Failed to Update VM Credential Password {$vmid}"));
         }
     }
 
@@ -5313,35 +5554,16 @@ class ProxmoxNode
             $payload['sshkeys'] = $sshKey;
         }
 
-        $url = "/nodes/{$node}/qemu/{$vmid}/config";
         $this->validateSegment($node, 'node');
-        return $this->client->post("{$this->baseUrl}{$url}", $payload);
+        $url = "/nodes/{$node}/qemu/{$vmid}/config";
+        return $this->client->post($url, $payload);
     }
 
     public function rebuildCloudInit(string $node, int $vmid)
     {
         $this->validateSegment($node, 'node');
         $url = "/nodes/{$node}/qemu/{$vmid}/cloudinit";
-        return $this->client->post("{$this->baseUrl}{$url}");
-
-        // Usage
-        /*try {
-            $proxmox = new ProxmoxAPI('https://your-proxmox-server', 'root', 'password');
-            $node = 'node1';
-            $vmid = 100;
-
-            // Inject SSH credentials
-            $response = $proxmox->injectSSHCredentials($node, $vmid, 'myuser', 'mypassword', 'ssh-rsa AAAAB3...user@domain');
-
-            if ($response['success']) {
-                echo "SSH credentials injected successfully.\n";
-                $proxmox->rebuildCloudInit($node, $vmid);
-            } else {
-                echo "Failed to inject SSH credentials: " . $response['message'] . "\n";
-            }
-        } catch (Exception $e) {
-            echo "Error: " . $e->getMessage();
-        }*/
+        return $this->client->post($url);
     }
 
     /**
@@ -5399,7 +5621,7 @@ class ProxmoxNode
         $this->validateSegment($type, 'type');
         $response = $this->client->post("nodes/{$node}/disks/{$type}", $params);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Disk fetch failed!', $response['data']);
         }
 
@@ -5423,7 +5645,7 @@ class ProxmoxNode
         $this->validateSegment($name, 'name');
         $response = $this->client->delete("nodes/{$node}/disks/{$type}/{$name}");
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Disk delete failed!', $response['data']);
         }
 
@@ -5445,7 +5667,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/monitor", $params);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Failed to fetch monitoring data!', $response['data']);
         }
 
@@ -5497,7 +5719,7 @@ class ProxmoxNode
         } catch (Exception $e) {
             return ResponseHelper::generate(
                 false,
-                'Failed to fetch monitoring data: ' . $e->getMessage(),
+                $this->safeErrorMessage($e, 'Failed to fetch monitoring data'),
                 []
             );
         }
@@ -5566,7 +5788,7 @@ class ProxmoxNode
         } catch (Exception $e) {
             return ResponseHelper::generate(
                 false,
-                'Failed to fetch metrics: ' . $e->getMessage(),
+                $this->safeErrorMessage($e, 'Failed to fetch metrics'),
                 []
             );
         }
@@ -5602,7 +5824,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/aplinfo", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'aplinfo fetch failed!', $response['data']);
         }
 
@@ -5639,7 +5861,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/dns", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'set Dns failed!', $response['data']);
         }
 
@@ -5658,7 +5880,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/execute", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Execute failed!', $response['data']);
         }
 
@@ -5677,7 +5899,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/migrateall", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Migrate failed!', $response['data']);
         }
 
@@ -5772,10 +5994,11 @@ class ProxmoxNode
     public function spiceShell($node, $data = array())
     {
         $this->validateSegment($node, 'node');
-        $response = $this->client->get("nodes/$node/spiceshell", $data);
+        // LPX-007: spiceshell is a side-effecting POST in the Proxmox API.
+        $response = $this->client->post("nodes/$node/spiceshell", $data);
 
-        if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'SPICE shell failed!', $response['data']);
+        if (!ResponseHelper::hasData($response)) {
+            return ResponseHelper::generate(false, 'SPICE shell failed!');
         }
 
         return ResponseHelper::generate(true, 'SPICE shell successfully', $response);
@@ -5793,7 +6016,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/startall", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Start all VMs failed!', $response['data']);
         }
 
@@ -5812,7 +6035,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/status", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Reboot node failed!', $response['data']);
         }
 
@@ -5831,7 +6054,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/stopall", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Reboot node failed!', $response['data']);
         }
 
@@ -5868,7 +6091,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/subscription", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'subscription update failed!', $response['data']);
         }
 
@@ -5887,7 +6110,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/subscription", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Set subscription failed!', $response['data']);
         }
 
@@ -5904,7 +6127,7 @@ class ProxmoxNode
      * @param string $until Display all log until this date-time string.
      * @throws Exception
      */
-    public function syslog(string $node, int $limit = null, $start = null, $since = null, $until = null)
+    public function syslog(string $node, ?int $limit = null, $start = null, $since = null, $until = null)
     {
         $optional['limit'] = !empty($limit) ? $limit : 50;
         $optional['start'] = !empty($start) ? $start : null;
@@ -5951,7 +6174,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/time", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'PUT time zone failed!', $response['data']);
         }
 
@@ -5970,7 +6193,7 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/vncshell", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Creates a VNC Shell proxy failed!', $response['data']);
         }
 
@@ -5984,7 +6207,7 @@ class ProxmoxNode
      * @param integer|null $port Port number returned by previous vncproxy call.
      * @param string|null $vncticket Ticket from previous call to vncproxy.
      */
-    public function vNCWebSocket(string $node, int $port = null, string $vncticket = null)
+    public function vNCWebSocket(string $node, ?int $port = null, ?string $vncticket = null)
     {
         $optional['port'] = !empty($port) ? $port : null;
         $optional['vncticket'] = !empty($vncticket) ? $vncticket : null;

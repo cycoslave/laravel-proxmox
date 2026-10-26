@@ -3,8 +3,10 @@
 namespace Cycoslave\Proxmox;
 
 use Illuminate\Support\Facades\Log;
+use Cycoslave\Proxmox\Support\LogRedactor;
 use Cycoslave\Proxmox\Traits\Authenticator;
 use Cycoslave\Proxmox\Traits\HttpClient;
+use Cycoslave\Proxmox\Exceptions\ApiException;
 
 /**
  * ProxmoxAccess — HTTP connection layer.
@@ -26,6 +28,9 @@ class ProxmoxAccess
 {
     use Authenticator, HttpClient;
 
+    /** @var array<string, true> Hosts a TLS-disabled warning has already been logged for (SAST-007 log-noise fix). */
+    private static array $tlsWarnedHosts = [];
+
     public function __construct(
         protected string  $host,
         protected int     $port        = 8006,
@@ -36,12 +41,50 @@ class ProxmoxAccess
         #[\SensitiveParameter] protected ?string $tokenSecret = null,
         protected bool    $verifyTls   = true,
         protected int     $timeout     = 10,
+        protected ?string $pinnedPublicKey = null,
     ) {
-        if (! $this->verifyTls) {
+        // H2: SPKI pinning (CURLOPT_PINNEDPUBLICKEY). Empty string == no pin.
+        // Accepts one or more "sha256//<base64>" hashes separated by ';'.
+        $this->pinnedPublicKey = self::normalisePin($this->pinnedPublicKey);
+
+        // SAST-007 (CWE-393/CWE-532): previously logged on every construction
+        // (e.g. once per named connection resolve, or per test), flooding logs
+        // with the same warning + hostname. Once-guard per host, per process.
+        // With a pin set, curl still enforces the public key even when
+        // chain/host verification is off, so the warning only applies to the
+        // unpinned verify-off case.
+        if (! $this->verifyTls && $this->pinnedPublicKey === null && ! isset(self::$tlsWarnedHosts[$host])) {
+            self::$tlsWarnedHosts[$host] = true;
+            // LPX-006 (CWE-532): log a stable endpoint id, not the host.
             Log::warning('Proxmox: TLS verification disabled. Do not use in production.', [
-                'host' => $host,
+                'endpoint' => LogRedactor::endpointId($host, $this->port),
             ]);
         }
+    }
+
+    /**
+     * Validate and normalise a CURLOPT_PINNEDPUBLICKEY value.
+     *
+     * @throws \InvalidArgumentException  When the value is not "sha256//<base64>" (';'-separated list allowed)
+     */
+    private static function normalisePin(?string $pin): ?string
+    {
+        $pin = $pin === null ? '' : trim($pin);
+
+        if ($pin === '') {
+            return null;
+        }
+
+        foreach (explode(';', $pin) as $hash) {
+            if (! preg_match('#^sha256//[A-Za-z0-9+/]{43}=$#', $hash)) {
+                throw new \InvalidArgumentException(
+                    'Proxmox: pinned_public_key must be "sha256//<base64>" (44-char base64 SHA-256 SPKI hash); '
+                    . 'multiple hashes may be separated by ";".'
+                );
+            }
+        }
+
+        return $pin;
     }
 
     // -------------------------------------------------------------------------
@@ -65,6 +108,7 @@ class ProxmoxAccess
             'realm'     => $this->realm,
             'verifyTls' => $this->verifyTls,
             'timeout'   => $this->timeout,
+            'pinnedPublicKey' => $this->pinnedPublicKey,
             'password'  => '[REDACTED]',
             'tokenId'   => '[REDACTED]',
             'tokenSecret' => '[REDACTED]',
@@ -142,6 +186,14 @@ class ProxmoxAccess
     /**
      * Build the full URL, attach auth headers, and dispatch via HttpClient.
      *
+     * SAST-008 (CWE-613): a ticket can be invalidated server-side before our
+     * locally-tracked TTL expires (password change, realm resync, PVE
+     * restart, ...). When that happens Proxmox answers 401 even though we
+     * believe the ticket is still fresh. Detect that once, drop the cached
+     * ticket, and retry exactly once with a newly issued one instead of
+     * failing every call until the local TTL catches up. Token auth is
+     * static (nothing to refresh) so it is excluded from the retry.
+     *
      * @throws \Exception
      */
     protected function request(string $method, string $path, array $payload = []): array
@@ -149,6 +201,17 @@ class ProxmoxAccess
         $url     = $this->baseUrl() . '/' . ltrim($path, '/');
         $headers = $this->authHeaders();   // resolved by Authenticator trait
 
-        return $this->sendRequest($method, $url, $payload, $headers);
+        try {
+            return $this->sendRequest($method, $url, $payload, $headers);
+        } catch (ApiException $e) {
+            if ($e->getStatusCode() !== 401 || $this->usingTokenAuth()) {
+                throw $e;
+            }
+
+            $this->invalidateTicket();
+            $headers = $this->authHeaders();
+
+            return $this->sendRequest($method, $url, $payload, $headers);
+        }
     }
 }

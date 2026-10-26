@@ -57,7 +57,7 @@ class ProxmoxPools
         $this->validateSegment($poolid, 'poolid');
         $response = $this->client->put("pools/{$poolid}", $data);
 
-        if (!isset($response['data'])){
+        if (!ResponseHelper::hasData($response)){
             return ResponseHelper::generate(false,'Pools system log fail.');
         }
         return ResponseHelper::generate(true,'Pools system log.', $response['data']);

@@ -2,6 +2,7 @@
     "name": "cycoslave/laravel-proxmox",
     "description": "A Proxmox API integration for Laravel (multi-connection capable fork)",
     "type": "library",
+    "version": "0.1.0",
     "license": "MIT",
     "homepage": "https://github.com/cycoslave/laravel-proxmox",
     "keywords": [

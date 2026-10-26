@@ -66,7 +66,7 @@ class ProxmoxAccessApi
     {
         $response = $this->client->post('access/domains', $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access add fail.');
         }
 
@@ -92,7 +92,7 @@ class ProxmoxAccessApi
         $this->validateSegment($realm, 'realm');
         $response = $this->client->put("access/domains/{$realm}", $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access domain update fail.');
         }
 
@@ -105,7 +105,7 @@ class ProxmoxAccessApi
         $this->validateSegment($realm, 'realm');
         $response = $this->client->delete("access/domains/{$realm}");
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access domain delete fail.');
         }
 
@@ -133,7 +133,7 @@ class ProxmoxAccessApi
     {
         $response = $this->client->post('access/groups', $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access group create fail.');
         }
 
@@ -159,7 +159,7 @@ class ProxmoxAccessApi
         $this->validateSegment($groupid, 'groupid');
         $response = $this->client->put("access/groups/{$groupid}", $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access group update fail.');
         }
 
@@ -172,7 +172,7 @@ class ProxmoxAccessApi
         $this->validateSegment($groupid, 'groupid');
         $response = $this->client->delete("access/groups/{$groupid}");
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access group delete fail.');
         }
 
@@ -200,7 +200,7 @@ class ProxmoxAccessApi
     {
         $response = $this->client->post('access/roles', $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access role create fail.');
         }
 
@@ -226,7 +226,7 @@ class ProxmoxAccessApi
         $this->validateSegment($roleid, 'roleid');
         $response = $this->client->put("access/roles/{$roleid}", $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access role update fail.');
         }
 
@@ -239,7 +239,7 @@ class ProxmoxAccessApi
         $this->validateSegment($roleid, 'roleid');
         $response = $this->client->delete("access/roles/{$roleid}");
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access role delete fail.');
         }
 
@@ -267,7 +267,7 @@ class ProxmoxAccessApi
     {
         $response = $this->client->post('access/users', $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access user create fail.');
         }
 
@@ -277,7 +277,7 @@ class ProxmoxAccessApi
     /** @throws \Exception */
     public function getUser(string $userid): array
     {
-        $this->validateSegment($userid, 'userid');
+        $this->validateIdentifierSegment($userid, 'userid');
         $response = $this->client->get("access/users/{$userid}");
 
         if (! isset($response['data'])) {
@@ -290,10 +290,10 @@ class ProxmoxAccessApi
     /** @throws \Exception */
     public function updateUser(string $userid, array $data): array
     {
-        $this->validateSegment($userid, 'userid');
+        $this->validateIdentifierSegment($userid, 'userid');
         $response = $this->client->put("access/users/{$userid}", $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access user update fail.');
         }
 
@@ -303,10 +303,10 @@ class ProxmoxAccessApi
     /** @throws \Exception */
     public function deleteUser(string $userid): array
     {
-        $this->validateSegment($userid, 'userid');
+        $this->validateIdentifierSegment($userid, 'userid');
         $response = $this->client->delete("access/users/{$userid}");
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access user delete fail.');
         }
 
@@ -318,7 +318,7 @@ class ProxmoxAccessApi
     {
         $response = $this->client->put('access/password', $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access user password update fail.');
         }
 
@@ -346,7 +346,7 @@ class ProxmoxAccessApi
     {
         $response = $this->client->put('access/acl', $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access user acl update fail.');
         }
 
@@ -362,7 +362,7 @@ class ProxmoxAccessApi
     {
         $response = $this->client->post('access/ticket', $data);
 
-        if (! isset($response['data'])) {
+        if (! ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Access user authentication fail.');
         }
 

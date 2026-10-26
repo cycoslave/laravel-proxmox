@@ -38,6 +38,7 @@ return [
             'token_secret' => env('PROXMOX_TOKEN_SECRET', null),
             'verify_tls'   => env('PROXMOX_VERIFY_TLS', true),
             'timeout'      => env('PROXMOX_TIMEOUT', 10),
+            'pinned_public_key' => env('PROXMOX_PINNED_PUBLIC_KEY'),
         ],
     ],
 ];
@@ -59,6 +60,11 @@ PROXMOX_TOKEN_SECRET=
 
 PROXMOX_VERIFY_TLS=true
 PROXMOX_TIMEOUT=10
+
+# Optional SPKI pin (sha256//<base64>; ';' separates several). Enforced by curl
+# (CURLOPT_PINNEDPUBLICKEY) even when PROXMOX_VERIFY_TLS=false, so a self-signed
+# node can be pinned instead of running unverified. Unpinned verify-off still warns.
+PROXMOX_PINNED_PUBLIC_KEY=
 ```
 
 ***
@@ -299,7 +305,7 @@ ProxmoxNode::aplinfo(string $node);
 ProxmoxNode::downloadTemplate(string $node, array $data);
 ProxmoxNode::dns(string $node);
 ProxmoxNode::setDns(string $node, array $data);
-ProxmoxNode::execute(string $node, array $data);
+ProxmoxNode::execute(string $node, array $data); // ⚠ remote command execution — see "Remote command execution" under Security Vulnerabilities
 ProxmoxNode::migrateAll(string $node, array $data);
 ProxmoxNode::netstat(string $node);
 ProxmoxNode::report(string $node);
@@ -500,7 +506,7 @@ ProxmoxNode::qemuStop(string $node, int $vmid, array $data = []);
 ProxmoxNode::qemuReboot(string $node, int $vmid, array $data = []);
 ProxmoxNode::qemuSuspend(string $node, int $vmid, array $data = []);
 ProxmoxNode::qemuAgent(string $node, int $vmid, array $data = []);
-ProxmoxNode::qemuAgentExec(string $node, int $vmid, array $data = []);
+ProxmoxNode::qemuAgentExec(string $node, int $vmid, array $data = []); // ⚠ remote command execution — see "Remote command execution" under Security Vulnerabilities
 ProxmoxNode::qemuAgentSetUserPassword(string $node, int $vmid, array $data = []);
 ProxmoxNode::qemuClone(string $node, int $vmid, array $data = []);
 ProxmoxNode::qemuConfig(string $node, int $vmid);
@@ -602,6 +608,28 @@ Please see [CONTRIBUTING](CONTRIBUTING.md) for details.
 ## Security Vulnerabilities
 
 Please review [our security policy](../../security/policy) for reporting vulnerabilities.
+
+### Remote command execution (`execute()` / `qemuAgentExec()`)
+
+`ProxmoxNode::execute()` (`POST /nodes/{node}/execute`) and
+`ProxmoxNode::qemuAgentExec()` (`POST /nodes/{node}/qemu/{vmid}/agent/exec`)
+run arbitrary commands on the Proxmox host or inside a guest via the QEMU
+Guest Agent, respectively. This package performs no authorization checks of
+its own before issuing these calls — it is a thin client over the Proxmox
+API and inherits whatever privileges the configured connection's
+credentials (ticket user or API token) hold on the target node/VM.
+
+Callers **must** treat any application code path that reaches `execute()` or
+`qemuAgentExec()` as a privileged, remote-code-execution-capable operation:
+
+- Never expose `$data`/command arguments to end users unvalidated; treat
+  them the same as you would raw shell input.
+- Scope the Proxmox user/token used by this package to the minimum
+  privileges needed (a dedicated realm/role, not `root@pam`) so a
+  compromised or misused call is contained.
+- Add your own application-level authorization/audit-logging in front of
+  any controller or job that calls these two methods — the package does
+  not do this for you.
 
 ## Credits
 

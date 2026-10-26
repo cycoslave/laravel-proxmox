@@ -67,6 +67,7 @@ class ProxmoxManager
             tokenSecret: $config['token_secret']        ?? null,
             verifyTls:   (bool) ($config['verify_tls'] ?? true),
             timeout:     (int) ($config['timeout']      ?? 10),
+            pinnedPublicKey: isset($config['pinned_public_key']) ? (string) $config['pinned_public_key'] : null,
         );
     }
 

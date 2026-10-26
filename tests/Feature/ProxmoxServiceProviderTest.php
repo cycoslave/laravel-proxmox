@@ -2,6 +2,7 @@
 
 namespace Cycoslave\Proxmox\Tests\Feature;
 
+use PHPUnit\Framework\Attributes\Test;
 use Orchestra\Testbench\TestCase;
 use Cycoslave\Proxmox\ProxmoxServiceProvider;
 use Cycoslave\Proxmox\ProxmoxManager;
@@ -46,19 +47,19 @@ class ProxmoxServiceProviderTest extends TestCase
     // Container bindings
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function proxmox_manager_is_bound_in_the_container(): void
     {
         $this->assertInstanceOf(ProxmoxManager::class, $this->app->make(ProxmoxManager::class));
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_string_alias_resolves_to_manager(): void
     {
         $this->assertInstanceOf(ProxmoxManager::class, $this->app->make('proxmox'));
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_manager_is_a_singleton(): void
     {
         $this->assertSame(
@@ -71,7 +72,7 @@ class ProxmoxServiceProviderTest extends TestCase
     // Resource singletons
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function proxmox_node_is_bound_as_singleton(): void
     {
         $a = $this->app->make('proxmox-node');
@@ -79,7 +80,7 @@ class ProxmoxServiceProviderTest extends TestCase
         $this->assertSame($a, $this->app->make('proxmox-node'));
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_cluster_is_bound_as_singleton(): void
     {
         $a = $this->app->make('proxmox-cluster');
@@ -87,7 +88,7 @@ class ProxmoxServiceProviderTest extends TestCase
         $this->assertSame($a, $this->app->make('proxmox-cluster'));
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_storage_is_bound_as_singleton(): void
     {
         $a = $this->app->make('proxmox-storage');
@@ -95,7 +96,7 @@ class ProxmoxServiceProviderTest extends TestCase
         $this->assertSame($a, $this->app->make('proxmox-storage'));
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_pools_is_bound_as_singleton(): void
     {
         $a = $this->app->make('proxmox-pools');
@@ -103,7 +104,7 @@ class ProxmoxServiceProviderTest extends TestCase
         $this->assertSame($a, $this->app->make('proxmox-pools'));
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_access_api_is_bound_as_singleton(): void
     {
         $a = $this->app->make('proxmox-access-api');
@@ -115,13 +116,13 @@ class ProxmoxServiceProviderTest extends TestCase
     // Facade
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function proxmox_facade_resolves_to_manager(): void
     {
         $this->assertInstanceOf(ProxmoxManager::class, Proxmox::getFacadeRoot());
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_facade_connection_method_returns_proxmox_access(): void
     {
         $this->assertInstanceOf(
@@ -130,25 +131,25 @@ class ProxmoxServiceProviderTest extends TestCase
         );
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_facade_node_method_returns_proxmox_node(): void
     {
         $this->assertInstanceOf(ProxmoxNode::class, Proxmox::node());
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_facade_cluster_method_returns_proxmox_cluster(): void
     {
         $this->assertInstanceOf(ProxmoxCluster::class, Proxmox::cluster());
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_facade_storage_method_returns_proxmox_storage(): void
     {
         $this->assertInstanceOf(ProxmoxStorage::class, Proxmox::storage());
     }
 
-    /** @test */
+    #[Test]
     public function proxmox_facade_pools_method_returns_proxmox_pools(): void
     {
         $this->assertInstanceOf(ProxmoxPools::class, Proxmox::pools());
@@ -158,7 +159,7 @@ class ProxmoxServiceProviderTest extends TestCase
     // Config
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function package_config_is_merged_into_app_config(): void
     {
         $this->assertNotNull(config('proxmox'));
@@ -166,7 +167,7 @@ class ProxmoxServiceProviderTest extends TestCase
         $this->assertArrayHasKey('connections', config('proxmox'));
     }
 
-    /** @test */
+    #[Test]
     public function default_connection_resolves_to_primary_per_spec(): void
     {
         $this->assertSame('primary', config('proxmox.default'));
@@ -176,7 +177,7 @@ class ProxmoxServiceProviderTest extends TestCase
     // Config publish
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function provider_registers_config_for_publishing(): void
     {
         $publishes = ProxmoxServiceProvider::pathsToPublish(

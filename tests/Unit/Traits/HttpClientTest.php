@@ -2,22 +2,97 @@
 
 namespace Cycoslave\Proxmox\Tests\Unit\Traits;
 
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Illuminate\Support\Facades\Log;
 use Cycoslave\Proxmox\ProxmoxAccess;
 use Cycoslave\Proxmox\Exceptions\ApiException;
 use Cycoslave\Proxmox\Exceptions\ConnectionException;
 
+/**
+ * Tests for Traits\HttpClient.
+ *
+ * Option-building tests (timeout floors/caps, TLS mapping, GET/POST URL
+ * handling) call the production buildCurlOptions() method directly via
+ * exposeOptions(), instead of testing a duplicated copy of the logic
+ * (SAST-009 fix — the old suite re-implemented sendRequest() in the
+ * anonymous test double, so it verified the test's own code, not the
+ * trait's).
+ *
+ * Network-boundary tests (cURL error / HTTP status / JSON decode
+ * mapping) still override sendRequest(), since exercising curl_exec()
+ * itself would require a real or mocked network call; there is no way
+ * to unit-test that boundary against the production method without a
+ * curl-handle abstraction, which is out of scope here.
+ *
+ * PLG-R2-01 harness fix: this is a plain PHPUnit\TestCase (no booted
+ * Laravel app), but ProxmoxAccess::__construct() calls the Log facade
+ * when verifyTls is false (tls_verify_is_disabled_when_verify_tls_is_false
+ * below). With no facade application bound, that previously errored with
+ * "A facade root has not been set." Swap in a minimal fake logger for the
+ * duration of this test class so the facade resolves without needing a
+ * full container, and clear it afterwards so it can't leak into other
+ * test files that run in the same process.
+ */
 class HttpClientTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        Log::clearResolvedInstance();
+        parent::tearDown();
+    }
+
+    private function swapFakeLogger(): void
+    {
+        Log::swap(new class {
+            public function warning($message, array $context = []): void
+            {
+                // no-op — this test only needs the facade to resolve.
+            }
+        });
+    }
+
     // -------------------------------------------------------------------------
-    // Helper
+    // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Anonymous ProxmoxAccess subclass that exposes the protected
+     * buildCurlOptions() production method for direct testing.
+     */
+    private function exposeOptions(bool $verifyTls = true, int $timeout = 10): ProxmoxAccess
+    {
+        return new class(
+            host: '127.0.0.1',
+            verifyTls: $verifyTls,
+            timeout: $timeout,
+        ) extends ProxmoxAccess {
+            public function __construct(string $host, bool $verifyTls, int $timeout)
+            {
+                parent::__construct(
+                    host: $host,
+                    tokenId: 'root@pam!tok',
+                    tokenSecret: 'uuid-secret',
+                    verifyTls: $verifyTls,
+                    timeout: $timeout,
+                );
+            }
+
+            public function publicBuildCurlOptions(
+                string $method,
+                string $url,
+                array  $params  = [],
+                array  $headers = [],
+            ): array {
+                return $this->buildCurlOptions($method, $url, $params, $headers);
+            }
+        };
+    }
 
     private function makeCaptureAccess(
         string $responseBody,
         int $httpCode,
         string $curlError = '',
-        array &$capturedOptions = [],
         bool $verifyTls = true,
         int $timeout = 10,
     ): ProxmoxAccess {
@@ -28,7 +103,6 @@ class HttpClientTest extends TestCase
             responseBody: $responseBody,
             httpCode: $httpCode,
             curlError: $curlError,
-            capturedOptions: $capturedOptions,
         ) extends ProxmoxAccess {
             public function __construct(
                 string $host,
@@ -37,7 +111,6 @@ class HttpClientTest extends TestCase
                 private readonly string $responseBody,
                 private readonly int $httpCode,
                 private readonly string $curlError,
-                private array &$capturedOptions,
             ) {
                 parent::__construct(
                     host: $host,
@@ -48,32 +121,16 @@ class HttpClientTest extends TestCase
                 );
             }
 
+            // Simulates the curl_exec/curl_getinfo/curl_error boundary that
+            // sendRequest() sits on top of; option-building itself is the
+            // real buildCurlOptions() from the HttpClient trait.
             protected function sendRequest(
                 string $method,
                 string $url,
                 array  $params  = [],
                 array  $headers = [],
             ): array {
-                $options = [
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_SSL_VERIFYPEER => $this->verifyTls,
-                    CURLOPT_SSL_VERIFYHOST => $this->verifyTls ? 2 : 0,
-                    CURLOPT_CONNECTTIMEOUT => max(1, min(5, $this->timeout)),
-                    CURLOPT_TIMEOUT        => max(1, $this->timeout),
-                    CURLOPT_CUSTOMREQUEST  => $method,
-                    CURLOPT_HTTPHEADER     => $headers,
-                ];
-
-                if ($method === 'POST' || $method === 'PUT') {
-                    $options[CURLOPT_URL]       = $url;
-                    $options[CURLOPT_POSTFIELDS] = http_build_query($params);
-                } else {
-                    $options[CURLOPT_URL] = empty($params)
-                        ? $url
-                        : $url . '?' . http_build_query($params);
-                }
-
-                $this->capturedOptions = $options;
+                $this->buildCurlOptions($method, $url, $params, $headers);
 
                 if ($this->curlError !== '') {
                     throw new ConnectionException("Proxmox cURL error: {$this->curlError}");
@@ -106,97 +163,98 @@ class HttpClientTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // Timeout floor
+    // Timeout floor / cap (production buildCurlOptions())
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function connect_timeout_is_at_least_1_when_timeout_is_zero(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts, true, 0);
-        $access->get('nodes');
+        $access = $this->exposeOptions(true, 0);
+        $opts   = $access->publicBuildCurlOptions('GET', 'https://127.0.0.1:8006/api2/json/nodes');
         $this->assertSame(1, $opts[CURLOPT_CONNECTTIMEOUT]);
     }
 
-    /** @test */
+    #[Test]
     public function total_timeout_is_at_least_1_when_timeout_is_zero(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts, true, 0);
-        $access->get('nodes');
+        $access = $this->exposeOptions(true, 0);
+        $opts   = $access->publicBuildCurlOptions('GET', 'https://127.0.0.1:8006/api2/json/nodes');
         $this->assertSame(1, $opts[CURLOPT_TIMEOUT]);
     }
 
-    /** @test */
+    #[Test]
     public function connect_timeout_is_capped_at_5_when_total_timeout_is_large(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts, true, 30);
-        $access->get('nodes');
+        $access = $this->exposeOptions(true, 30);
+        $opts   = $access->publicBuildCurlOptions('GET', 'https://127.0.0.1:8006/api2/json/nodes');
         $this->assertSame(5, $opts[CURLOPT_CONNECTTIMEOUT]);
     }
 
-    /** @test */
+    #[Test]
     public function total_timeout_reflects_configured_value(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts, true, 15);
-        $access->get('nodes');
+        $access = $this->exposeOptions(true, 15);
+        $opts   = $access->publicBuildCurlOptions('GET', 'https://127.0.0.1:8006/api2/json/nodes');
         $this->assertSame(15, $opts[CURLOPT_TIMEOUT]);
     }
 
     // -------------------------------------------------------------------------
-    // TLS option mapping
+    // TLS option mapping (production buildCurlOptions())
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function tls_verify_peer_is_true_when_verify_tls_is_enabled(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts, true);
-        $access->get('nodes');
+        $access = $this->exposeOptions(true);
+        $opts   = $access->publicBuildCurlOptions('GET', 'https://127.0.0.1:8006/api2/json/nodes');
         $this->assertTrue($opts[CURLOPT_SSL_VERIFYPEER]);
         $this->assertSame(2, $opts[CURLOPT_SSL_VERIFYHOST]);
     }
 
-    /** @test */
+    #[Test]
     public function tls_verify_is_disabled_when_verify_tls_is_false(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts, false);
-        $access->get('nodes');
+        $this->swapFakeLogger();
+
+        $access = $this->exposeOptions(false);
+        $opts   = $access->publicBuildCurlOptions('GET', 'https://127.0.0.1:8006/api2/json/nodes');
         $this->assertFalse($opts[CURLOPT_SSL_VERIFYPEER]);
         $this->assertSame(0, $opts[CURLOPT_SSL_VERIFYHOST]);
     }
 
     // -------------------------------------------------------------------------
-    // GET / POST URL + param handling
+    // GET / POST URL + param handling (production buildCurlOptions())
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function get_appends_params_as_query_string(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts);
-        $access->get('nodes', ['foo' => 'bar', 'baz' => '1']);
+        $access = $this->exposeOptions();
+        $opts   = $access->publicBuildCurlOptions(
+            'GET',
+            'https://127.0.0.1:8006/api2/json/nodes',
+            ['foo' => 'bar', 'baz' => '1'],
+        );
         $this->assertStringContainsString('?foo=bar&baz=1', $opts[CURLOPT_URL]);
     }
 
-    /** @test */
+    #[Test]
     public function get_with_no_params_has_no_query_string(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts);
-        $access->get('nodes');
+        $access = $this->exposeOptions();
+        $opts   = $access->publicBuildCurlOptions('GET', 'https://127.0.0.1:8006/api2/json/nodes');
         $this->assertStringNotContainsString('?', $opts[CURLOPT_URL]);
     }
 
-    /** @test */
+    #[Test]
     public function post_sends_params_as_body_not_query_string(): void
     {
-        $opts   = [];
-        $access = $this->makeCaptureAccess($this->okBody(), 200, '', $opts);
-        $access->post('nodes/pve1/qemu', ['vmid' => 100, 'name' => 'test']);
+        $access = $this->exposeOptions();
+        $opts   = $access->publicBuildCurlOptions(
+            'POST',
+            'https://127.0.0.1:8006/api2/json/nodes/pve1/qemu',
+            ['vmid' => 100, 'name' => 'test'],
+        );
         $this->assertStringNotContainsString('?', $opts[CURLOPT_URL]);
         $this->assertStringContainsString('vmid=100', $opts[CURLOPT_POSTFIELDS]);
         $this->assertStringContainsString('name=test', $opts[CURLOPT_POSTFIELDS]);
@@ -206,7 +264,7 @@ class HttpClientTest extends TestCase
     // Error → exception mapping
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function curl_error_throws_connection_exception(): void
     {
         $this->expectException(ConnectionException::class);
@@ -216,7 +274,7 @@ class HttpClientTest extends TestCase
         $access->get('nodes');
     }
 
-    /** @test */
+    #[Test]
     public function http_400_throws_api_exception_with_correct_status_code(): void
     {
         $this->expectException(ApiException::class);
@@ -231,7 +289,7 @@ class HttpClientTest extends TestCase
         }
     }
 
-    /** @test */
+    #[Test]
     public function http_403_throws_api_exception(): void
     {
         $this->expectException(ApiException::class);
@@ -239,7 +297,7 @@ class HttpClientTest extends TestCase
         $access->get('nodes');
     }
 
-    /** @test */
+    #[Test]
     public function http_500_throws_api_exception(): void
     {
         $this->expectException(ApiException::class);
@@ -247,7 +305,7 @@ class HttpClientTest extends TestCase
         $access->get('nodes');
     }
 
-    /** @test */
+    #[Test]
     public function invalid_json_response_throws_api_exception(): void
     {
         $this->expectException(ApiException::class);
@@ -257,7 +315,7 @@ class HttpClientTest extends TestCase
         $access->get('nodes');
     }
 
-    /** @test */
+    #[Test]
     public function http_4xx_error_message_does_not_contain_query_string_params(): void
     {
         $access = $this->makeCaptureAccess('', 404);
@@ -275,7 +333,7 @@ class HttpClientTest extends TestCase
     // Successful response
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function successful_response_returns_decoded_array(): void
     {
         $payload = ['id' => 'pve1', 'type' => 'node'];

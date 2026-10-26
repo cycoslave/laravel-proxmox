@@ -44,7 +44,7 @@ class ProxmoxStorage
 
         $response = $this->client->post('storage', $params);
 
-        if (!isset($response['data'])){
+        if (!ResponseHelper::hasData($response)){
             return ResponseHelper::generate(false,'Storage create fail.');
         }
         return ResponseHelper::generate(true,'Storage created successfully.', $response['data']);
@@ -189,10 +189,10 @@ class ProxmoxStorage
         $this->validateSegment((string) $storage, 'storage');
         $response = $this->client->delete("storage/{$storage}");
 
-        if (array_key_exists('data', $response) && is_null($response['data'])) {
+        if (ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(true, 'Storage deleted successfully', $response['data']);
         }
-        return ResponseHelper::generate(false,'Storage delete fail!', $response['data']);
+        return ResponseHelper::generate(false,'Storage delete fail!');
     }
 
     /**
@@ -208,7 +208,7 @@ class ProxmoxStorage
         $this->validateSegment((string) $storage, 'storage');
         $response = $this->client->put("storage/{$storage}", $params);
 
-        if (!isset($response['data'])){
+        if (!ResponseHelper::hasData($response)){
             return ResponseHelper::generate(false,'Storage update fail!');
         }
         return ResponseHelper::generate(true,'Storage updated successfully!', $response['data']);

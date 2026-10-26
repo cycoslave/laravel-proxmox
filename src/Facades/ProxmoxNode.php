@@ -5,9 +5,7 @@ namespace Cycoslave\Proxmox\Facades;
 use Illuminate\Support\Facades\Facade;
 
 /**
- * @method static \Cycoslave\Proxmox\Proxmox on(string $connection)
- *
- * @see \Cycoslave\Proxmox\ProxmoxManager
+ * @see \Cycoslave\Proxmox\ProxmoxNode
  */
 class ProxmoxNode extends Facade
 {

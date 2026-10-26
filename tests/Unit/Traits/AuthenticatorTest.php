@@ -2,6 +2,7 @@
 
 namespace Cycoslave\Proxmox\Tests\Unit\Traits;
 
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Cycoslave\Proxmox\ProxmoxAccess;
 use Cycoslave\Proxmox\Exceptions\AuthenticationException;
@@ -77,7 +78,7 @@ class AuthenticatorTest extends TestCase
     // API token auth
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function it_uses_api_token_header_when_token_credentials_are_set(): void
     {
         $captured = [];
@@ -116,7 +117,7 @@ class AuthenticatorTest extends TestCase
         $this->assertStringContainsString('aaaabbbb-cccc-dddd-eeee-ffffffffffff', $authHeader);
     }
 
-    /** @test */
+    #[Test]
     public function it_does_not_call_login_when_using_token_auth(): void
     {
         $captured = [];
@@ -151,7 +152,7 @@ class AuthenticatorTest extends TestCase
     // Ticket auth
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function it_sends_ticket_login_request_on_first_call_with_password_auth(): void
     {
         $captured = [];
@@ -164,7 +165,7 @@ class AuthenticatorTest extends TestCase
         $this->assertStringEndsWith('/access/ticket', $captured[0]['url']);
     }
 
-    /** @test */
+    #[Test]
     public function ticket_login_payload_uses_username_at_realm_format(): void
     {
         $captured = [];
@@ -201,7 +202,7 @@ class AuthenticatorTest extends TestCase
         $this->assertSame('hunter2',  $captured[0]['params']['password']);
     }
 
-    /** @test */
+    #[Test]
     public function ticket_is_cached_and_not_re_requested_on_subsequent_calls(): void
     {
         $captured = [];
@@ -219,7 +220,7 @@ class AuthenticatorTest extends TestCase
         $this->assertCount(1, $loginCalls, 'Ticket should only be fetched once');
     }
 
-    /** @test */
+    #[Test]
     public function expired_ticket_triggers_re_authentication(): void
     {
         $captured = [];
@@ -244,11 +245,22 @@ class AuthenticatorTest extends TestCase
                 ];
             }
 
+            // PLG-R2-01 harness fix: $ticket/$csrf/$ticketExpiry are private
+            // properties compiled into ProxmoxAccess by the Authenticator
+            // trait, so this anonymous subclass cannot see them by name --
+            // `$this->ticket = ...` here would silently create unrelated
+            // dynamic properties on the subclass instead of mutating the
+            // real state, and authHeaders() (running in ProxmoxAccess's own
+            // scope) would keep reading the untouched, still-valid ticket.
+            // Reflection reaches the actual private storage declared on
+            // ProxmoxAccess so the test genuinely forces expiry.
             public function expireTicket(): void
             {
-                $this->ticket       = 'PVE:root@pam:OLD';
-                $this->csrf         = 'OLD-CSRF';
-                $this->ticketExpiry = time() - 1;
+                foreach (['ticket' => 'PVE:root@pam:OLD', 'csrf' => 'OLD-CSRF', 'ticketExpiry' => time() - 1] as $prop => $value) {
+                    $ref = new \ReflectionProperty(ProxmoxAccess::class, $prop);
+                    $ref->setAccessible(true);
+                    $ref->setValue($this, $value);
+                }
             }
         };
 
@@ -263,7 +275,7 @@ class AuthenticatorTest extends TestCase
         $this->assertCount(2, $loginCalls, 'Should re-authenticate after expiry');
     }
 
-    /** @test */
+    #[Test]
     public function it_sends_cookie_and_csrf_headers_for_ticket_auth(): void
     {
         $captured = [];
@@ -286,7 +298,7 @@ class AuthenticatorTest extends TestCase
     // Null-password guard
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function it_throws_authentication_exception_when_password_is_null_and_no_token(): void
     {
         $this->expectException(AuthenticationException::class);
@@ -307,7 +319,7 @@ class AuthenticatorTest extends TestCase
         $access->get('nodes');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_authentication_exception_when_ticket_response_has_no_ticket(): void
     {
         $this->expectException(AuthenticationException::class);

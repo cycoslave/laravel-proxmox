@@ -2,7 +2,8 @@
 
 namespace Cycoslave\Proxmox\Tests\Unit;
 
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\Test;
+use Orchestra\Testbench\TestCase;
 use Cycoslave\Proxmox\ProxmoxManager;
 use Cycoslave\Proxmox\ProxmoxAccess;
 use Cycoslave\Proxmox\ProxmoxNode;
@@ -12,89 +13,73 @@ use Cycoslave\Proxmox\ProxmoxPools;
 use Cycoslave\Proxmox\ProxmoxAccessApi;
 use InvalidArgumentException;
 
+/**
+ * PLG-R2-01 remediation: ProxmoxManager::__construct() is typed to
+ * Illuminate\Contracts\Foundation\Application (production code, not
+ * touched here). The previous suite passed a bespoke ArrayAccess-only
+ * stand-in that satisfied `$app['config'][...]` reads at the call sites
+ * but not the constructor's type hint, so every test errored with a
+ * TypeError before the real assertions ever ran.
+ *
+ * Fix: extend Orchestra\Testbench\TestCase (already a require-dev
+ * dependency, used by tests/Feature/ProxmoxServiceProviderTest.php) so
+ * $this->app is a real Illuminate\Foundation\Application booted by
+ * Testbench, and drive each scenario by setting the 'proxmox' config key
+ * directly on it instead of faking the container.
+ */
 class ProxmoxManagerTest extends TestCase
 {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
-    private function makeApp(array $config = []): object
-    {
-        return new class($config) {
-            public function __construct(private array $config) {}
-
-            public function offsetGet(string $key): mixed
-            {
-                return match ($key) {
-                    'config' => new class($this->config) {
-                        public function __construct(private array $cfg) {}
-
-                        public function offsetGet(string $key): mixed
-                        {
-                            $parts = explode('.', $key);
-                            $value = $this->cfg;
-                            foreach ($parts as $part) {
-                                if (! is_array($value) || ! array_key_exists($part, $value)) {
-                                    return null;
-                                }
-                                $value = $value[$part];
-                            }
-                            return $value;
-                        }
-                    },
-                    default => null,
-                };
-            }
-        };
-    }
-
     private function primaryConfig(): array
     {
         return [
-            'proxmox' => [
-                'default' => 'primary',
-                'connections' => [
-                    'primary' => [
-                        'host'         => '10.0.0.1',
-                        'port'         => 8006,
-                        'username'     => 'root',
-                        'realm'        => 'pam',
-                        'token_id'     => 'root@pam!test',
-                        'token_secret' => 'uuid-secret-value',
-                        'verify_tls'   => true,
-                        'timeout'      => 10,
-                    ],
-                    'secondary' => [
-                        'host'         => '10.0.0.2',
-                        'port'         => 8006,
-                        'username'     => 'admin',
-                        'realm'        => 'pve',
-                        'token_id'     => 'admin@pve!tok',
-                        'token_secret' => 'another-uuid',
-                        'verify_tls'   => false,
-                        'timeout'      => 5,
-                    ],
+            'default' => 'primary',
+            'connections' => [
+                'primary' => [
+                    'host'         => '10.0.0.1',
+                    'port'         => 8006,
+                    'username'     => 'root',
+                    'realm'        => 'pam',
+                    'token_id'     => 'root@pam!test',
+                    'token_secret' => 'uuid-secret-value',
+                    'verify_tls'   => true,
+                    'timeout'      => 10,
+                ],
+                'secondary' => [
+                    'host'         => '10.0.0.2',
+                    'port'         => 8006,
+                    'username'     => 'admin',
+                    'realm'        => 'pve',
+                    'token_id'     => 'admin@pve!tok',
+                    'token_secret' => 'another-uuid',
+                    'verify_tls'   => false,
+                    'timeout'      => 5,
                 ],
             ],
         ];
     }
 
-    private function makeManager(array $config = []): ProxmoxManager
+    private function makeManager(?array $proxmoxConfig = null): ProxmoxManager
     {
-        return new ProxmoxManager($this->makeApp($config ?: $this->primaryConfig()));
+        $this->app['config']->set('proxmox', $proxmoxConfig ?? $this->primaryConfig());
+
+        return new ProxmoxManager($this->app);
     }
 
     // -------------------------------------------------------------------------
     // Default connection resolution
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function connection_resolves_default_when_no_name_given(): void
     {
         $this->assertInstanceOf(ProxmoxAccess::class, $this->makeManager()->connection());
     }
 
-    /** @test */
+    #[Test]
     public function connection_resolves_named_connection(): void
     {
         $manager = $this->makeManager();
@@ -102,19 +87,19 @@ class ProxmoxManagerTest extends TestCase
         $this->assertInstanceOf(ProxmoxAccess::class, $manager->connection('secondary'));
     }
 
-    /** @test */
+    #[Test]
     public function connection_throws_when_default_config_is_missing(): void
     {
         $this->expectException(InvalidArgumentException::class);
 
         $manager = $this->makeManager([
-            'proxmox' => ['connections' => ['primary' => ['host' => '1.2.3.4']]],
+            'connections' => ['primary' => ['host' => '1.2.3.4']],
         ]);
 
         $manager->connection();
     }
 
-    /** @test */
+    #[Test]
     public function connection_throws_when_named_connection_is_not_defined(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -127,14 +112,14 @@ class ProxmoxManagerTest extends TestCase
     // Connection caching
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function same_connection_name_returns_identical_instance(): void
     {
         $manager = $this->makeManager();
         $this->assertSame($manager->connection('primary'), $manager->connection('primary'));
     }
 
-    /** @test */
+    #[Test]
     public function different_connection_names_return_different_instances(): void
     {
         $manager = $this->makeManager();
@@ -145,31 +130,31 @@ class ProxmoxManagerTest extends TestCase
     // Resource wrapper types
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function node_returns_proxmox_node_instance(): void
     {
         $this->assertInstanceOf(ProxmoxNode::class, $this->makeManager()->node());
     }
 
-    /** @test */
+    #[Test]
     public function cluster_returns_proxmox_cluster_instance(): void
     {
         $this->assertInstanceOf(ProxmoxCluster::class, $this->makeManager()->cluster());
     }
 
-    /** @test */
+    #[Test]
     public function storage_returns_proxmox_storage_instance(): void
     {
         $this->assertInstanceOf(ProxmoxStorage::class, $this->makeManager()->storage());
     }
 
-    /** @test */
+    #[Test]
     public function pools_returns_proxmox_pools_instance(): void
     {
         $this->assertInstanceOf(ProxmoxPools::class, $this->makeManager()->pools());
     }
 
-    /** @test */
+    #[Test]
     public function access_api_returns_proxmox_access_api_instance(): void
     {
         $this->assertInstanceOf(ProxmoxAccessApi::class, $this->makeManager()->accessApi());
@@ -179,21 +164,21 @@ class ProxmoxManagerTest extends TestCase
     // Resource wrapper caching
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function node_is_cached_across_calls_for_same_connection(): void
     {
         $manager = $this->makeManager();
         $this->assertSame($manager->node(), $manager->node());
     }
 
-    /** @test */
+    #[Test]
     public function cluster_is_cached_across_calls_for_same_connection(): void
     {
         $manager = $this->makeManager();
         $this->assertSame($manager->cluster(), $manager->cluster());
     }
 
-    /** @test */
+    #[Test]
     public function different_connections_return_different_node_instances(): void
     {
         $manager = $this->makeManager();
@@ -204,7 +189,7 @@ class ProxmoxManagerTest extends TestCase
     // purge()
     // -------------------------------------------------------------------------
 
-    /** @test */
+    #[Test]
     public function purge_named_connection_forces_new_access_instance(): void
     {
         $manager = $this->makeManager();
@@ -213,7 +198,7 @@ class ProxmoxManagerTest extends TestCase
         $this->assertNotSame($before, $manager->connection('primary'));
     }
 
-    /** @test */
+    #[Test]
     public function purge_named_connection_forces_new_resource_wrapper_instance(): void
     {
         $manager = $this->makeManager();
@@ -222,7 +207,7 @@ class ProxmoxManagerTest extends TestCase
         $this->assertNotSame($before, $manager->node('primary'));
     }
 
-    /** @test */
+    #[Test]
     public function purge_null_clears_all_connections(): void
     {
         $manager           = $this->makeManager();
@@ -233,7 +218,7 @@ class ProxmoxManagerTest extends TestCase
         $this->assertNotSame($secondaryBefore, $manager->connection('secondary'));
     }
 
-    /** @test */
+    #[Test]
     public function purge_null_clears_all_resource_caches(): void
     {
         $manager       = $this->makeManager();
@@ -252,7 +237,7 @@ class ProxmoxManagerTest extends TestCase
         $this->assertNotSame($apiBefore,     $manager->accessApi('primary'));
     }
 
-    /** @test */
+    #[Test]
     public function purge_named_does_not_affect_other_connections(): void
     {
         $manager         = $this->makeManager();

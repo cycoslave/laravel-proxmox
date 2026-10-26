@@ -19,7 +19,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster fail.');
+            return ResponseHelper::generate(false,'Cluster fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster list', $response['data']);
@@ -35,7 +35,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/backup");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster backup.');
+            return ResponseHelper::generate(false,'Cluster backup.');
         }
 
         return ResponseHelper::generate(true,'Cluster backup', $response['data']);
@@ -50,7 +50,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/status');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster status fail.');
+            return ResponseHelper::generate(false,'Cluster status fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster status', $response['data']);
@@ -65,7 +65,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/resources');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster resources fail.');
+            return ResponseHelper::generate(false,'Cluster resources fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster resources', $response['data']);
@@ -80,7 +80,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/tasks');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster tasks fail.');
+            return ResponseHelper::generate(false,'Cluster tasks fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster tasks', $response['data']);
@@ -95,7 +95,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/log');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster log fail.');
+            return ResponseHelper::generate(false,'Cluster log fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster log', $response['data']);
@@ -110,7 +110,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/backup');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster backup schedule fail.');
+            return ResponseHelper::generate(false,'Cluster backup schedule fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster backup schedule', $response['data']);
@@ -124,8 +124,8 @@ class ProxmoxCluster
     {
         $response = $this->client->post('cluster/backup', $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster Create backup schedule fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster Create backup schedule fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster Create backup schedule', $response['data']);
@@ -142,7 +142,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/backup/$id");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster backup job fail.');
+            return ResponseHelper::generate(false,'Cluster backup job fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster backup job', $response['data']);
@@ -159,8 +159,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $id, 'id');
         $response = $this->client->put("cluster/backup/$id", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster backup job create fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster backup job create fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster backup job created', $response['data']);
@@ -176,8 +176,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $id, 'id');
         $response = $this->client->delete("cluster/backup/$id");
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster backup job delete fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster backup job delete fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster backup job deleted', $response['data']);
@@ -192,7 +192,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/config");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster config fail.');
+            return ResponseHelper::generate(false,'Cluster config fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster config', $response['data']);
@@ -208,7 +208,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/config/nodes");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster node config fail.');
+            return ResponseHelper::generate(false,'Cluster node config fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster node config', $response['data']);
@@ -224,7 +224,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/config/totem");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster totem protocol settings fail.');
+            return ResponseHelper::generate(false,'Cluster totem protocol settings fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster totem protocol settings', $response['data']);
@@ -240,7 +240,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/firewall');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall fail.');
+            return ResponseHelper::generate(false,'Cluster firewall fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall', $response['data']);
@@ -255,7 +255,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/firewall/aliases');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall aliases fail.');
+            return ResponseHelper::generate(false,'Cluster firewall aliases fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall aliases', $response['data']);
@@ -271,8 +271,8 @@ class ProxmoxCluster
     {
         $response = $this->client->post('cluster/firewall/aliases', $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall Create fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall Create fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall created', $response['data']);
@@ -289,7 +289,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/aliases/$name");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall alias fail.');
+            return ResponseHelper::generate(false,'Cluster firewall alias fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall alias', $response['data']);
@@ -307,8 +307,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $name, 'name');
         $response = $this->client->put("cluster/firewall/aliases/$name", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall alias update fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall alias update fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall alias updated successfully', $response['data']);
@@ -324,8 +324,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $name, 'name');
         $response = $this->client->delete("cluster/firewall/aliases/$name");
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall alias delete fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall alias delete fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall alias deleted successfully', $response['data']);
@@ -340,7 +340,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/groups");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall groups fail.');
+            return ResponseHelper::generate(false,'Cluster firewall groups fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall groups', $response['data']);
@@ -354,10 +354,11 @@ class ProxmoxCluster
      */
     public function createFirewallGroup(array $data)
     {
-        $response = $this->client->post("cluster/firewall/groups");
+        // LPX-008 (CWE-628): the caller's group definition was never sent.
+        $response = $this->client->post("cluster/firewall/groups", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall security group fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall security group fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall security group', $response['data']);
@@ -374,7 +375,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/groups/$group");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall security group fail.');
+            return ResponseHelper::generate(false,'Cluster firewall security group fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall security group', $response['data']);
@@ -392,8 +393,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $group, 'group');
         $response = $this->client->post("cluster/firewall/groups/$group", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall create fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall create fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall created', $response['data']);
@@ -409,8 +410,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $group, 'group');
         $response = $this->client->delete("cluster/firewall/groups/$group");
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall remove fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall remove fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall removed successfully');
@@ -428,7 +429,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/groups/$group/$pos");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall group position fail.');
+            return ResponseHelper::generate(false,'Cluster firewall group position fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall group position details', $response['data']);
@@ -447,8 +448,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $group, 'group');
         $response = $this->client->put("cluster/firewall/groups/$group/$pos", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall group position update fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall group position update fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall group position updated', $response['data']);
@@ -465,8 +466,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $group, 'group');
         $response = $this->client->delete("cluster/firewall/groups/$group/$pos");
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall group position delete fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall group position delete fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall group position deleted successfully');
@@ -481,7 +482,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/firewall/ipset');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall ips fail.');
+            return ResponseHelper::generate(false,'Cluster firewall ips fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall ips', $response['data']);
@@ -497,8 +498,8 @@ class ProxmoxCluster
     {
         $response = $this->client->post('cluster/firewall/ipset', $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall ip create fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall ip create fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall ip created successfully', $response['data']);
@@ -515,7 +516,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/ipset/$name");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall ip details fail.');
+            return ResponseHelper::generate(false,'Cluster firewall ip details fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall ip details', $response['data']);
@@ -533,8 +534,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $name, 'name');
         $response = $this->client->post("cluster/firewall/ipset/$name", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall ip add fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall ip add fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall ip added successfully', $response['data']);
@@ -550,8 +551,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $name, 'name');
         $response = $this->client->delete("cluster/firewall/ipset/$name");
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall ip delete fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall ip delete fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall ip deleted successfully');
@@ -566,7 +567,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/rules");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall list rules fail.');
+            return ResponseHelper::generate(false,'Cluster firewall list rules fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall list rules', $response['data']);
@@ -582,8 +583,8 @@ class ProxmoxCluster
     {
         $response = $this->client->post("cluster/firewall/rules", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall create rule fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall create rule fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall created rule successfully', $response['data']);
@@ -599,7 +600,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/rules/$pos");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall Get single rule data fail.');
+            return ResponseHelper::generate(false,'Cluster firewall Get single rule data fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall Get single rule data', $response['data']);
@@ -615,8 +616,8 @@ class ProxmoxCluster
     {
         $response = $this->client->put("cluster/firewall/rules/$pos", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Modify rule data fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Modify rule data fail.');
         }
 
         return ResponseHelper::generate(true,'Modify rule data', $response['data']);
@@ -630,8 +631,8 @@ class ProxmoxCluster
     {
         $response = $this->client->put('cluster/firewall', $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall update fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall update fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall updated successfully', $response['data']);
@@ -644,12 +645,12 @@ class ProxmoxCluster
      * @param integer $pos Update rule at position <pos>.
      * @throws \Exception
      */
-    public function deleteFirewallRulesPos($pos)
+    public function deleteFirewallRulesPos(int $pos)
     {
         $response = $this->client->delete("cluster/firewall/rules/$pos");
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall rule delete fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall rule delete fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall rule deleted successfully');
@@ -664,7 +665,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/macros");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall macros fail.');
+            return ResponseHelper::generate(false,'Cluster firewall macros fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall macros', $response['data']);
@@ -679,7 +680,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/options");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall options fail.');
+            return ResponseHelper::generate(false,'Cluster firewall options fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall options', $response['data']);
@@ -694,8 +695,8 @@ class ProxmoxCluster
     {
         $response = $this->client->put("cluster/firewall/options", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall options update fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster firewall options update fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall options updated', $response['data']);
@@ -710,7 +711,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/firewall/refs");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster firewall refs fail.');
+            return ResponseHelper::generate(false,'Cluster firewall refs fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster firewall refs', $response['data']);
@@ -725,7 +726,7 @@ class ProxmoxCluster
         $response = $this->client->get('cluster/ha/resources');
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster HA resources fail.');
+            return ResponseHelper::generate(false,'Cluster HA resources fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster HA resources', $response['data']);
@@ -741,7 +742,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/ha/groups");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster HA group fail.');
+            return ResponseHelper::generate(false,'Cluster HA group fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster HA group', $response['data']);
@@ -758,7 +759,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/ha/groups/$group");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster HA group fail.');
+            return ResponseHelper::generate(false,'Cluster HA group fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster HA group', $response['data']);
@@ -773,7 +774,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/replication");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster replication fail.');
+            return ResponseHelper::generate(false,'Cluster replication fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster replication', $response['data']);
@@ -788,8 +789,8 @@ class ProxmoxCluster
     {
         $response = $this->client->post("cluster/replication", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster replication create fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster replication create fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster replication created successfully', $response['data']);
@@ -806,7 +807,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/replication/$id");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster replication details fail.');
+            return ResponseHelper::generate(false,'Cluster replication details fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster replication details', $response['data']);
@@ -823,8 +824,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $id, 'id');
         $response = $this->client->put("cluster/replication/$id", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster replication update fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster replication update fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster replication updated successfully', $response['data']);
@@ -840,8 +841,8 @@ class ProxmoxCluster
         $this->validateSegment((string) $id, 'id');
         $response = $this->client->delete("cluster/replication/$id");
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster replication delete fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster replication delete fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster replication deleted successfully');
@@ -857,7 +858,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/log", $optional);
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster log fail.');
+            return ResponseHelper::generate(false,'Cluster log fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster log', $response['data']);
@@ -875,7 +876,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/nextid", $optional);
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster next Vmid fail.');
+            return ResponseHelper::generate(false,'Cluster next Vmid fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster next Vmid', $response['data']);
@@ -890,7 +891,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/options");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster datacenter options fail.');
+            return ResponseHelper::generate(false,'Cluster datacenter options fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster datacenter options', $response['data']);
@@ -906,8 +907,8 @@ class ProxmoxCluster
     {
         $response = $this->client->put("cluster/options", $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster set datacenter options fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster set datacenter options fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster set datacenter options', $response['data']);
@@ -924,7 +925,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/resources", $optional);
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster resources fail.');
+            return ResponseHelper::generate(false,'Cluster resources fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster resources', $response['data']);
@@ -939,7 +940,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/status");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster status fail.');
+            return ResponseHelper::generate(false,'Cluster status fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster status', $response['data']);
@@ -952,7 +953,7 @@ class ProxmoxCluster
         $response = $this->client->get("cluster/tasks");
 
         if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster tasks fail.');
+            return ResponseHelper::generate(false,'Cluster tasks fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster tasks', $response['data']);
@@ -966,8 +967,8 @@ class ProxmoxCluster
     {
         $response = $this->client->post('cluster/ha/resources', $data);
 
-        if (!isset($response['data'])){
-            ResponseHelper::generate(false,'Cluster Create HA resource fail.');
+        if (!ResponseHelper::hasData($response)){
+            return ResponseHelper::generate(false,'Cluster Create HA resource fail.');
         }
 
         return ResponseHelper::generate(true,'Cluster Create HA resource successfully', $response['data']);

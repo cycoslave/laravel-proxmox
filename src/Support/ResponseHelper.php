@@ -36,4 +36,21 @@ class ResponseHelper
 
         return $response;
     }
+
+    /**
+     * Whether a decoded Proxmox API envelope carries a `data` key.
+     *
+     * LPX-004 (CWE-253): Proxmox answers many successful mutations
+     * (POST/PUT/DELETE) with `{"data": null}`. `isset($r['data'])` is false
+     * for a present-but-null key, so a successful write was reported as a
+     * failure. Mutation wrappers use key *presence* (not non-nullness) as
+     * the success signal; HTTP/API errors are already raised as exceptions
+     * by the HTTP layer, so a missing key means a malformed envelope.
+     *
+     * @param  array  $response  Decoded API response
+     */
+    public static function hasData(array $response): bool
+    {
+        return array_key_exists('data', $response);
+    }
 }
