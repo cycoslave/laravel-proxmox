@@ -97,7 +97,8 @@ class CloudInitCredentialsTest extends TestCase
         $this->assertSame('/nodes/pve1/qemu/100/config', $calls[0]['path']);
         $this->assertSame('ubuntu', $calls[0]['data']['ciuser']);
         $this->assertSame('secret-pw', $calls[0]['data']['cipassword']);
-        $this->assertSame('ssh-rsa AAAA... comment', $calls[0]['data']['sshkeys']);
+        // F-04: sshkeys is percent-encoded (PVE does not decode '+'), consistently with createUbuntuVMWithSSH().
+        $this->assertSame(rawurlencode('ssh-rsa AAAA... comment'), $calls[0]['data']['sshkeys']);
     }
 
     #[Test]
@@ -164,9 +165,10 @@ class CloudInitCredentialsTest extends TestCase
         $this->assertStringStartsWith('ssh-rsa ', $result['ssh_key']);
 
         // Cleanup the key material generateSSHKey() wrote to disk.
-        $keyDir = rtrim(sys_get_temp_dir(), '/') . '/proxmox-ssh-keys';
-        foreach (glob($keyDir . '/test_vm*') ?: [] as $path) {
-            @unlink($path);
+        // F-10: the key pair lives in a private per-call temp directory.
+        foreach (['private_key_path', 'public_key_path'] as $field) {
+            @unlink($result['generated_key'][$field]);
         }
+        @rmdir(dirname($result['generated_key']['private_key_path']));
     }
 }

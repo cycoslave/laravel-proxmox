@@ -355,7 +355,7 @@ ProxmoxNode::cephOsdIn(string $node, int $osdid, array $data);
 ProxmoxNode::cephOsdOut(string $node, int $osdid, array $data);
 ProxmoxNode::getCephPools(string $node);
 ProxmoxNode::createCephPool(string $node, array $data);
-ProxmoxNode::destroyCephPool(string $node);
+ProxmoxNode::destroyCephPool(string $node, string $name);   // DELETE nodes/{node}/ceph/pools/{name}
 ProxmoxNode::cephConfig(string $node);
 ProxmoxNode::cephCrush(string $node);
 ProxmoxNode::cephDisks(string $node);
@@ -575,7 +575,7 @@ ProxmoxNode::deleteStorageContentVolume(string $node, string $storage, string $v
 ProxmoxNode::storageRRD(string $node);
 ProxmoxNode::storageRRDdata(string $node);
 ProxmoxNode::storageStatus(string $node);
-ProxmoxNode::storageUpload(string $node, array $data = []);
+ProxmoxNode::storageUpload(string $node, string $storage, array $data = []);   // POST nodes/{node}/storage/{storage}/upload
 ```
 
 ### Tasks
@@ -586,7 +586,12 @@ ProxmoxNode::tasksUpid(string $node, string $upid);
 ProxmoxNode::tasksStop(string $node, string $upid);
 ProxmoxNode::tasksLog(string $node, string $upid, ?int $limit = null, ?int $start = null);
 ProxmoxNode::tasksStatus(string $node, string $upid);
+ProxmoxNode::checkTaskStatus(string $node, string $upid);   // throws ProxmoxException if the task stopped with a non-OK exit status
+ProxmoxNode::waitForTaskCompletion(string $node, string $upid, int $timeoutSeconds = 120, int $pollIntervalSeconds = 2);  // throws TaskTimeoutException at the deadline
 ```
+
+> `$volume` (storage content) and `$cidr` (IPSet entries) arguments are validated and URL-encoded as a single path
+> segment; invalid values throw `InvalidArgumentException` before any request is made. See [CHANGELOG](CHANGELOG.md).
 
 ### Vzdump
 

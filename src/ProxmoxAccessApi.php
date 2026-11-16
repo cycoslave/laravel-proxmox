@@ -62,7 +62,7 @@ class ProxmoxAccessApi
     }
 
     /** @throws \Exception */
-    public function addDomain(array $data): array
+    public function addDomain(#[\SensitiveParameter] array $data): array
     {
         $response = $this->client->post('access/domains', $data);
 
@@ -87,7 +87,7 @@ class ProxmoxAccessApi
     }
 
     /** @throws \Exception */
-    public function updateDomain(string $realm, array $data): array
+    public function updateDomain(string $realm, #[\SensitiveParameter] array $data): array
     {
         $this->validateSegment($realm, 'realm');
         $response = $this->client->put("access/domains/{$realm}", $data);
@@ -263,7 +263,7 @@ class ProxmoxAccessApi
     }
 
     /** @throws \Exception */
-    public function createUser(array $data): array
+    public function createUser(#[\SensitiveParameter] array $data): array
     {
         $response = $this->client->post('access/users', $data);
 
@@ -314,7 +314,7 @@ class ProxmoxAccessApi
     }
 
     /** @throws \Exception */
-    public function changeUserPassword(array $data): array
+    public function changeUserPassword(#[\SensitiveParameter] array $data): array
     {
         $response = $this->client->put('access/password', $data);
 
@@ -358,7 +358,7 @@ class ProxmoxAccessApi
     // -------------------------------------------------------------------------
 
     /** @throws \Exception */
-    public function createTicket(array $data): array
+    public function createTicket(#[\SensitiveParameter] array $data): array
     {
         $response = $this->client->post('access/ticket', $data);
 

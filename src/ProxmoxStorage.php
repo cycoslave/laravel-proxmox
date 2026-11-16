@@ -32,7 +32,7 @@ class ProxmoxStorage
      * @param array $params Storage configuration parameters
      * @throws \Exception
      */
-    public function createStorage(array $params)
+    public function createStorage(#[\SensitiveParameter] array $params)
     {
         // Validate required parameters
         $required = ['storage', 'type'];
@@ -203,7 +203,7 @@ class ProxmoxStorage
      * @return array
      * @throws \Exception
      */
-    public function updateStorage(string $storage, array $params): array
+    public function updateStorage(string $storage, #[\SensitiveParameter] array $params): array
     {
         $this->validateSegment((string) $storage, 'storage');
         $response = $this->client->put("storage/{$storage}", $params);

@@ -3,8 +3,9 @@
 namespace Cycoslave\Proxmox\Traits;
 
 use Cycoslave\Proxmox\Exceptions\AuthenticationException;
+use Cycoslave\Proxmox\Exceptions\ProxmoxException;
 use Cycoslave\Proxmox\Support\LogRedactor;
-use Illuminate\Support\Facades\Log;
+use Cycoslave\Proxmox\Support\SafeLog;
 
 /**
  * Authenticator trait — ticket and API token auth for Proxmox.
@@ -53,6 +54,11 @@ trait Authenticator
     protected function authHeaders(): array
     {
         if ($this->usingTokenAuth()) {
+            // F-05 (CWE-113): CR/LF/NUL in a header value would let a caller
+            // smuggle extra headers / a second request onto the wire.
+            $this->assertSafeHeaderValue((string) $this->tokenId, 'API token id');
+            $this->assertSafeHeaderValue((string) $this->tokenSecret, 'API token secret');
+
             return [
                 "Authorization: PVEAPIToken={$this->tokenId}={$this->tokenSecret}",
             ];
@@ -62,10 +68,28 @@ trait Authenticator
             $this->loginWithTicket();
         }
 
+        $this->assertSafeHeaderValue((string) $this->ticket, 'ticket');
+        $this->assertSafeHeaderValue((string) $this->csrf, 'CSRF token');
+
         return [
             'Cookie: PVEAuthCookie=' . $this->ticket,
             'CSRFPreventionToken: '  . $this->csrf,
         ];
+    }
+
+    /**
+     * F-05 (CWE-113): reject CR, LF and NUL bytes in a value destined for an
+     * HTTP header. The message names the field only, never the value.
+     *
+     * @throws ProxmoxException
+     */
+    private function assertSafeHeaderValue(#[\SensitiveParameter] string $value, string $what): void
+    {
+        if (preg_match('/[\r\n\x00]/', $value) === 1) {
+            throw new ProxmoxException(
+                "Proxmox {$what} contains a forbidden control character (CR, LF or NUL)."
+            );
+        }
     }
 
     /**
@@ -98,7 +122,9 @@ trait Authenticator
             // exception message stays generic.
             // LPX-006 (CWE-532): the log entry carries a stable endpoint id
             // and a categorised error, never the host or raw message.
-            Log::warning('Proxmox ticket authentication request failed.', [
+            // F-09: SafeLog is a no-op when no Log facade root is bound, so
+            // standalone use still surfaces the AuthenticationException below.
+            SafeLog::warning('Proxmox ticket authentication request failed.', [
                 'endpoint' => LogRedactor::endpointId((string) $this->host, (int) $this->port),
                 ...LogRedactor::exceptionContext($e),
             ]);
@@ -109,11 +135,23 @@ trait Authenticator
             );
         }
 
-        if (empty($response['data']['ticket'])) {
+        if (empty($response['data']['ticket']) || ! is_string($response['data']['ticket'])) {
             throw new AuthenticationException(
                 'Proxmox ticket authentication failed: no ticket in response.'
             );
         }
+
+        // F-05: the CSRF token is mandatory for ticket auth; guard the read
+        // instead of raising an "Undefined array key" warning.
+        if (empty($response['data']['CSRFPreventionToken']) || ! is_string($response['data']['CSRFPreventionToken'])) {
+            throw new AuthenticationException(
+                'Proxmox ticket authentication failed: no CSRF prevention token in response.'
+            );
+        }
+
+        // Validate before caching so a hostile value is never stored.
+        $this->assertSafeHeaderValue($response['data']['ticket'], 'ticket');
+        $this->assertSafeHeaderValue($response['data']['CSRFPreventionToken'], 'CSRF token');
 
         $this->ticket       = $response['data']['ticket'];
         $this->csrf         = $response['data']['CSRFPreventionToken'];

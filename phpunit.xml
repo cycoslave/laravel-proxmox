@@ -17,15 +17,17 @@
         </testsuite>
     </testsuites>
 
-    <coverage>
+    <!--
+        Coverage reports are deliberately NOT configured here: without Xdebug/PCOV the
+        "No code coverage driver" warning is fatal (failOnWarning) and a bare
+        `vendor/bin/phpunit` would execute zero tests. Use `composer coverage`
+        (phpunit-coverage.xml.dist) in an environment with a coverage driver.
+    -->
+    <source>
         <include>
             <directory>src</directory>
         </include>
-        <report>
-            <html outputDirectory="build/coverage"/>
-            <text outputFile="build/coverage.txt" showOnlySummary="true"/>
-        </report>
-    </coverage>
+    </source>
 
     <php>
         <env name="APP_ENV" value="testing"/>

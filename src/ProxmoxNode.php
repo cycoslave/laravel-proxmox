@@ -3,16 +3,38 @@
 namespace Cycoslave\Proxmox;
 
 use Exception;
-use Illuminate\Support\Facades\Log;
+use Cycoslave\Proxmox\Exceptions\ProxmoxException;
+use Cycoslave\Proxmox\Exceptions\TaskTimeoutException;
 use Cycoslave\Proxmox\Support\ResponseHelper;
 use Cycoslave\Proxmox\Support\LogRedactor;
+use Cycoslave\Proxmox\Support\SafeLog;
 use Cycoslave\Proxmox\Traits\ValidatesPathSegments;
 
 class ProxmoxNode
 {
     use ValidatesPathSegments;
 
+    /** F-10: private per-instance temp dir for generated SSH keys when no host-app storage exists. */
+    private ?string $tmpKeyRoot = null;
+
     public function __construct(protected ProxmoxAccess $client) {}
+
+    /** F-08: seconds a graceful status/shutdown may take before falling back to status/stop. */
+    protected int $guestShutdownTimeout = 60;
+
+    /** F-08: seconds to wait for a stop / start task. */
+    protected int $guestTaskTimeout = 60;
+
+    /** F-08: seconds to wait for the QEMU guest agent to answer after a (re)start. */
+    protected int $guestAgentTimeout = 30;
+
+    /** F-08: seconds between polls while waiting for a guest state change. */
+    protected int $guestPollInterval = 2;
+
+    /** F-08: ostype values accepted by Proxmox for qemu guests. */
+    private const GUEST_OSTYPES = [
+        'l24', 'l26', 'other', 'solaris', 'w2k', 'w2k3', 'w2k8', 'wvista', 'win7', 'win8', 'win10', 'win11', 'wxp',
+    ];
 
     /**
      * SAST-006 (CWE-209): $e->getMessage() on a network/API exception can
@@ -27,7 +49,9 @@ class ProxmoxNode
      */
     private function safeErrorMessage(\Throwable $e, string $context): string
     {
-        Log::warning("Proxmox: {$context}", LogRedactor::exceptionContext($e));
+        // F-09: SafeLog is a no-op when no Log facade root is bound, so the
+        // caller still gets its generic message instead of a facade error.
+        SafeLog::warning("Proxmox: {$context}", LogRedactor::exceptionContext($e));
 
         return "{$context}.";
     }
@@ -474,14 +498,22 @@ class ProxmoxNode
 
     /**
      * Destroy POOL
-     * DELETE /api2/json/nodes/{node}/ceph/pools
+     * DELETE /api2/json/nodes/{node}/ceph/pools/{name}
+     *
+     * LPX-SAST-006: `$name` is now a required parameter (BREAKING; the
+     * previous signature called DELETE nodes/{node}/ceph/pools, which is
+     * not a valid Proxmox route).
+     *
      * @param string $node The cluster node name.
+     * @param string $name The Ceph pool name.
+     * @throws \InvalidArgumentException If $node or $name is not a safe path segment.
      * @throws Exception
      */
-    public function destroyCephPool(string $node): array
+    public function destroyCephPool(string $node, string $name): array
     {
         $this->validateSegment($node, 'node');
-        $response = $this->client->delete("nodes/$node/ceph/pools");
+        $this->validateSegment($name, 'name');
+        $response = $this->client->delete("nodes/$node/ceph/pools/$name");
 
         if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Destroy POOL fail!');
@@ -862,7 +894,8 @@ class ProxmoxNode
     public function firewallRulesLog(string $node): array
     {
         $this->validateSegment($node, 'node');
-        $response = $this->client->get("nodes/$node/firewall/rules/log");
+        // LPX-SAST-006: was GET nodes/$node/firewall/rules/log (invalid rule position).
+        $response = $this->client->get("nodes/$node/firewall/log");
 
         if (!isset($response['data'])) {
             return ResponseHelper::generate(false, 'Read firewall log fail!');
@@ -925,10 +958,11 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/firewall/rules", $data);
 
+        // LPX-SAST-001: predicate was inverted by LPX-004 (success reported as failure).
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(true, 'Created Firewall', $response['data']);
+            return ResponseHelper::generate(false, 'Create Firewall fail!');
         }
-        return ResponseHelper::generate(false, 'Create Firewall fail!');
+        return ResponseHelper::generate(true, 'Created Firewall', $response['data']);
     }
 
     /**
@@ -958,10 +992,11 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/rules/$pos");
 
+        // LPX-SAST-001: predicate was inverted by LPX-004 (success reported as failure).
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(true, 'Removed Firewall', $response['data']);
+            return ResponseHelper::generate(false, 'Remove Firewall fail!');
         }
-        return ResponseHelper::generate(false, 'Remove Firewall fail!');
+        return ResponseHelper::generate(true, 'Removed Firewall', $response['data']);
     }
 
     /**
@@ -989,7 +1024,7 @@ class ProxmoxNode
      * @param array $data
      * @throws Exception
      */
-    public function createLxc(string $node, array $data): array
+    public function createLxc(string $node, #[\SensitiveParameter] array $data): array
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/lxc", $data);
@@ -1278,7 +1313,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $this->validateSegment($cidr, 'cidr');
+        $cidr = $this->cidrSegment($cidr); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->get("nodes/$node/lxc/$vmid/firewall/ipset/$name/$cidr");
 
         if (!isset($response['data'])) {
@@ -1302,7 +1337,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $this->validateSegment($cidr, 'cidr');
+        $cidr = $this->cidrSegment($cidr); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->put("nodes/$node/lxc/$vmid/firewall/ipset/$name/$cidr", $data);
 
         if (!ResponseHelper::hasData($response)) {
@@ -1325,7 +1360,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $this->validateSegment($cidr, 'cidr');
+        $cidr = $this->cidrSegment($cidr); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->delete("nodes/$node/lxc/$vmid/firewall/ipset/$name/$cidr");
 
         if (!ResponseHelper::hasData($response)) {
@@ -1845,7 +1880,7 @@ class ProxmoxNode
      * @param array $data
      * @throws Exception
      */
-    public function setLxcConfig(string $node, int $vmid, array $data): array
+    public function setLxcConfig(string $node, int $vmid, #[\SensitiveParameter] array $data): array
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/lxc/$vmid/config", $data);
@@ -2031,7 +2066,7 @@ class ProxmoxNode
      * @param string|null $vncticket Ticket from previous call to vncproxy.
      * @throws Exception
      */
-    public function lxcVncwebsocket(string $node, int $vmid, ?int $port = null, ?string $vncticket = null): array
+    public function lxcVncwebsocket(string $node, int $vmid, ?int $port = null, #[\SensitiveParameter] ?string $vncticket = null): array
     {
         $optional['port'] = !empty($port) ? $port : null;
         $optional['vncticket'] = !empty($vncticket) ? $vncticket : null;
@@ -2189,7 +2224,7 @@ class ProxmoxNode
      * @param array $data
      * @throws Exception
      */
-    public function createQemu(string $node, array $data): array
+    public function createQemu(string $node, #[\SensitiveParameter] array $data): array
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu", $data);
@@ -2468,7 +2503,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $this->validateSegment($cidr, 'cidr');
+        $cidr = $this->cidrSegment($cidr); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->get("nodes/$node/qemu/$vmid/firewall/ipset/$name/$cidr");
 
         if (!isset($response['data'])) {
@@ -2491,7 +2526,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $this->validateSegment($cidr, 'cidr');
+        $cidr = $this->cidrSegment($cidr); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->put("nodes/$node/qemu/$vmid/firewall/ipset/$name/$cidr", $data);
 
         if (!ResponseHelper::hasData($response)) {
@@ -2513,7 +2548,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($name, 'name');
-        $this->validateSegment($cidr, 'cidr');
+        $cidr = $this->cidrSegment($cidr); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->delete("nodes/$node/qemu/$vmid/firewall/ipset/$name/$cidr");
 
         if (ResponseHelper::hasData($response)) {
@@ -3046,7 +3081,7 @@ class ProxmoxNode
      * @param integer $vmid The (unique) ID of the VM.
      * @param array $data
      */
-    public function qemuAgentSetUserPassword(string $node, int $vmid, array $data): array
+    public function qemuAgentSetUserPassword(string $node, int $vmid, #[\SensitiveParameter] array $data): array
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/agent/set-user-password", $data);
@@ -3102,7 +3137,7 @@ class ProxmoxNode
      * @param array $data
      * @throws Exception
      */
-    public function createQemuConfig(string $node, int $vmid, array $data): array
+    public function createQemuConfig(string $node, int $vmid, #[\SensitiveParameter] array $data): array
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/$node/qemu/$vmid/config", $data);
@@ -3120,7 +3155,7 @@ class ProxmoxNode
      * @param integer $vmid The (unique) ID of the VM.
      * @param array $data
      */
-    public function setQemuConfig(string $node, int $vmid, array $data): array
+    public function setQemuConfig(string $node, int $vmid, #[\SensitiveParameter] array $data): array
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/qemu/$vmid/config", $data);
@@ -3390,7 +3425,7 @@ class ProxmoxNode
      * @param integer|null $port Port number returned by previous vncproxy call.
      * @param string|null $vncticket Ticket from previous call to vncproxy.
      */
-    public function qemuVncwebsocket(string $node, int $vmid, ?int $port = null, ?string $vncticket = null): array
+    public function qemuVncwebsocket(string $node, int $vmid, ?int $port = null, #[\SensitiveParameter] ?string $vncticket = null): array
     {
         $optional['port'] = !empty($port) ? $port : null;
         $optional['vncticket'] = !empty($vncticket) ? $vncticket : null;
@@ -3871,7 +3906,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($storage, 'storage');
-        $this->validateSegment($volume, 'volume');
+        $volume = $this->volumeSegment($volume); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->get("nodes/$node/storage/$storage/content/$volume");
 
         if (!isset($response['data'])) {
@@ -3893,7 +3928,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($storage, 'storage');
-        $this->validateSegment($volume, 'volume');
+        $volume = $this->volumeSegment($volume); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->post("nodes/$node/storage/$storage/content/$volume", $data);
 
         if (!ResponseHelper::hasData($response)) {
@@ -3914,7 +3949,7 @@ class ProxmoxNode
     {
         $this->validateSegment($node, 'node');
         $this->validateSegment($storage, 'storage');
-        $this->validateSegment($volume, 'volume');
+        $volume = $this->volumeSegment($volume); // LPX-SAST-006: validated + rawurlencoded
         $response = $this->client->delete("nodes/$node/storage/$storage/content/$volume");
 
         if (!ResponseHelper::hasData($response)) {
@@ -3983,18 +4018,29 @@ class ProxmoxNode
 
     /**
      * Upload templates and ISO images.
-     * GET /api2/json/nodes/{node}/storage/upload
+     * POST /api2/json/nodes/{node}/storage/{storage}/upload
+     *
+     * LPX-SAST-006: `$storage` is now a required parameter and the request
+     * is a POST (BREAKING; the previous signature issued
+     * GET nodes/{node}/storage/upload, which is not a valid Proxmox route).
+     *
      * @param string $node The cluster node name.
-     * @param array $data
-     * @return mixed
+     * @param string $storage The target storage identifier.
+     * @param array $data Upload fields (e.g. `content`, `filename`). F-07: put the file in
+     *                    as a \CURLFile / \CURLStringFile (usually under `filename`); a payload
+     *                    containing one is sent as real multipart/form-data, any other
+     *                    payload stays urlencoded.
+     * @return array
+     * @throws \InvalidArgumentException If $node or $storage is not a safe path segment.
      * @throws Exception
      */
-    public function storageUpload(string $node, array $data): array
+    public function storageUpload(string $node, string $storage, array $data = []): array
     {
         $this->validateSegment($node, 'node');
-        $response = $this->client->get("nodes/$node/storage/upload", $data);
+        $this->validateSegment($storage, 'storage');
+        $response = $this->client->post("nodes/$node/storage/$storage/upload", $data);
 
-        if (!isset($response['data'])) {
+        if (!ResponseHelper::hasData($response)) {
             return ResponseHelper::generate(false, 'Upload templates and ISO images fail!');
         }
 
@@ -4038,7 +4084,7 @@ class ProxmoxNode
     public function tasksUpid(string $node, string $upid): array
     {
         $this->validateSegment($node, 'node');
-        $this->validateSegment($upid, 'upid');
+        $this->validateIdentifierSegment($upid, 'upid'); // LPX-SAST-006: UPIDs contain ':' and '@'
         $response = $this->client->get("nodes/$node/tasks/$upid");
 
         if (!isset($response['data'])) {
@@ -4058,7 +4104,7 @@ class ProxmoxNode
     public function tasksStop(string $node, string $upid): array
     {
         $this->validateSegment($node, 'node');
-        $this->validateSegment($upid, 'upid');
+        $this->validateIdentifierSegment($upid, 'upid'); // LPX-SAST-006: UPIDs contain ':' and '@'
         $response = $this->client->delete("nodes/$node/tasks/$upid");
 
         if (ResponseHelper::hasData($response)) {
@@ -4083,7 +4129,7 @@ class ProxmoxNode
         $optional['start']   = !empty($start) ? $start : null;
 
         $this->validateSegment($node, 'node');
-        $this->validateSegment($upid, 'upid');
+        $this->validateIdentifierSegment($upid, 'upid'); // LPX-SAST-006: UPIDs contain ':' and '@'
         $response = $this->client->get("nodes/$node/tasks/$upid/log", $optional);
 
         if (!isset($response['data'])) {
@@ -4102,7 +4148,7 @@ class ProxmoxNode
     public function tasksStatus(string $node, string $upid): array
     {
         $this->validateSegment($node, 'node');
-        $this->validateSegment($upid, 'upid');
+        $this->validateIdentifierSegment($upid, 'upid'); // LPX-SAST-006: UPIDs contain ':' and '@'
         $response = $this->client->get("nodes/$node/tasks/$upid/status");
 
         if (!isset($response['data'])) {
@@ -4182,7 +4228,7 @@ class ProxmoxNode
      * @return \Illuminate\Http\JsonResponse
      * @throws Exception
      */
-    public function createVM(string $node, array $params): array
+    public function createVM(string $node, #[\SensitiveParameter] array $params): array
     {
         // Get next available VMID if not provided
         if (!isset($params['vmid'])) {
@@ -4219,7 +4265,10 @@ class ProxmoxNode
             return ResponseHelper::generate(false, 'VM create fail!');
         }
 
-        $this->configVM($node, $params['vmid'], $config);
+        // LPX-SAST-005: do not overwrite a caller-supplied cpu (already applied by the POST above).
+        if (!isset($params['cpu'])) {
+            $this->configVM($node, $params['vmid'], $config);
+        }
 
         $successResponse = [
             'data' => $response['data'],
@@ -4236,7 +4285,7 @@ class ProxmoxNode
         return $this->client->put("nodes/{$node}/qemu/{$vmId}/config", $params);
     }
 
-    public function createStorage(array $params): array
+    public function createStorage(#[\SensitiveParameter] array $params): array
     {
         // Validate required parameters
         $required = ['storage', 'type'];
@@ -4254,42 +4303,91 @@ class ProxmoxNode
         return ResponseHelper::generate(true, 'storage created!', $response['data']);
     }
 
+    /**
+     * Fetch a task's status envelope as returned by Proxmox.
+     *
+     * LPX-SAST-007 (BEHAVIOUR CHANGE): a task that has stopped with an
+     * exit status other than "OK" now throws instead of silently returning
+     * the status (the previous `return` ahead of the `throw` made the error
+     * path dead code). Running tasks and successful tasks still return the
+     * raw status envelope unchanged.
+     *
+     * @throws \InvalidArgumentException If $node or $upid is not a safe path segment.
+     * @throws ProxmoxException          If the task stopped with a non-OK exit status.
+     */
     public function checkTaskStatus(string $node, string $upid)
     {
         $this->validateSegment($node, 'node');
-        $this->validateSegment($upid, 'upid');
+        $this->validateIdentifierSegment($upid, 'upid'); // LPX-SAST-006: UPIDs contain ':' and '@'
         $status = $this->client->get("nodes/{$node}/tasks/{$upid}/status");
 
-        if ($status['data']['status'] === 'stopped') {
-            if ($status['data']['exitstatus'] === 'OK') {
-                return $status; // Task completed successfully
-            } else {
-                return $status;
-                throw new Exception("Task failed with exit status: " . $status['data']['exitstatus']);
+        if (($status['data']['status'] ?? null) === 'stopped') {
+            $exit = $status['data']['exitstatus'] ?? null;
+            if ($exit !== 'OK') {
+                throw new ProxmoxException('Task failed with exit status: ' . (is_scalar($exit) ? $exit : 'unknown'));
             }
         }
+
         return $status;
     }
 
-    public function waitForTaskCompletion(string $node, string $upid)
+    /**
+     * Poll a task until it stops, and return its status `data` array.
+     *
+     * LPX-SAST-007 (BEHAVIOUR CHANGE): polling is now bounded. If the task
+     * is still running after `$timeoutSeconds` a TaskTimeoutException is
+     * thrown (the task itself is NOT stopped — use tasksStop() if wanted).
+     * The default (120 s) suits short tasks; pass a larger value for
+     * long-running work such as backups or migrations.
+     *
+     * @param int $timeoutSeconds      Maximum seconds to wait (>= 1).
+     * @param int $pollIntervalSeconds Seconds between polls (>= 1).
+     * @throws \InvalidArgumentException If $node/$upid is unsafe or an interval is < 1.
+     * @throws ProxmoxException          If the task stopped with a non-OK exit status.
+     * @throws TaskTimeoutException      If the task is still running at the deadline.
+     */
+    public function waitForTaskCompletion(string $node, string $upid, int $timeoutSeconds = 120, int $pollIntervalSeconds = 2)
     {
         $this->validateSegment($node, 'node');
-        $this->validateSegment($upid, 'upid');
-        do {
+        $this->validateIdentifierSegment($upid, 'upid'); // LPX-SAST-006: UPIDs contain ':' and '@'
+        if ($timeoutSeconds < 1 || $pollIntervalSeconds < 1) {
+            throw new \InvalidArgumentException('timeoutSeconds and pollIntervalSeconds must be >= 1.');
+        }
+
+        $deadline = $this->monotonicSeconds() + $timeoutSeconds;
+
+        while (true) {
             // Poll task status
             $status = $this->client->get("nodes/{$node}/tasks/{$upid}/status");
 
-            if ($status['data']['status'] === 'stopped') {
-                if ($status['data']['exitstatus'] === 'OK') {
+            if (($status['data']['status'] ?? null) === 'stopped') {
+                $exit = $status['data']['exitstatus'] ?? null;
+                if ($exit === 'OK') {
                     return $status['data']; // Task completed successfully
-                } else {
-                    throw new Exception("Task failed with exit status: " . $status['data']['exitstatus']);
                 }
+                throw new ProxmoxException('Task failed with exit status: ' . (is_scalar($exit) ? $exit : 'unknown'));
             }
 
-            // Wait for a short period before polling again
-            sleep(2);
-        } while (true);
+            $remaining = $deadline - $this->monotonicSeconds();
+            if ($remaining <= 0) {
+                throw new TaskTimeoutException("Task did not finish within {$timeoutSeconds}s.");
+            }
+
+            // Wait for a short period before polling again (never past the deadline)
+            $this->sleepSeconds(max(1, min($pollIntervalSeconds, (int) ceil($remaining))));
+        }
+    }
+
+    /** Monotonic clock in seconds; overridable so tests need not really wait. */
+    protected function monotonicSeconds(): float
+    {
+        return hrtime(true) / 1e9;
+    }
+
+    /** Sleep hook; overridable so tests need not really wait. */
+    protected function sleepSeconds(int $seconds): void
+    {
+        sleep($seconds);
     }
 
     /**
@@ -4320,7 +4418,14 @@ class ProxmoxNode
     public function vmQuery(string $node, int $vmid)
     {
         $this->validateSegment($node, 'node');
-        return $this->client->get("nodes/$node/qemu/$vmid/status/current");
+        $response = $this->client->get("nodes/$node/qemu/$vmid/status/current");
+
+        // F-11: documented ResponseHelper envelope (was the raw ['data' => ...] payload).
+        if (!isset($response['data'])) {
+            return ResponseHelper::generate(false, 'VM query failed!');
+        }
+
+        return ResponseHelper::generate(true, 'VM query successful', $response['data']);
     }
 
     /**
@@ -4554,7 +4659,8 @@ class ProxmoxNode
                 'name' => $newName
             ]);
 
-            if (isset($result['data']) && $result['data']) {
+            // F-11: setVMConfig() returns the ResponseHelper envelope.
+            if ($result['success'] ?? false) {
                 return ResponseHelper::generate(true, 'VM renamed successfully.');
             }
 
@@ -4567,17 +4673,140 @@ class ProxmoxNode
 
 
     /**
-     * Fix non-running guest agent
+     * F-08: config fragment for an optional caller-supplied ostype. When the caller passes none,
+     * nothing is sent so the guest's existing ostype (e.g. win11, BSD) is preserved.
+     *
+     * @return array<string,string>
+     * @throws \InvalidArgumentException For an unknown ostype.
      */
-    public function fixGuestAgent(string $node, int $vmid): array
+    private function guestOstypeParams(?string $ostype): array
+    {
+        if ($ostype === null) {
+            return [];
+        }
+        if (!in_array($ostype, self::GUEST_OSTYPES, true)) {
+            throw new \InvalidArgumentException('Unsupported ostype.');
+        }
+        return ['ostype' => $ostype];
+    }
+
+    /** F-08: true if the API answered with a UPID string. */
+    private function isUpid(mixed $value): bool
+    {
+        return is_string($value) && str_starts_with($value, 'UPID:');
+    }
+
+    /**
+     * F-08: bounded poll until the guest reports $wanted ('running'/'stopped').
+     * Uses the monotonicSeconds()/sleepSeconds() hooks, never a fixed sleep().
+     */
+    private function awaitGuestStatus(string $node, int $vmid, string $wanted, int $timeoutSeconds): bool
+    {
+        $deadline = $this->monotonicSeconds() + $timeoutSeconds;
+        while (true) {
+            $current = $this->client->get("nodes/{$node}/qemu/{$vmid}/status/current");
+            if (($current['data']['status'] ?? null) === $wanted) {
+                return true;
+            }
+            $remaining = $deadline - $this->monotonicSeconds();
+            if ($remaining <= 0) {
+                return false;
+            }
+            $this->sleepSeconds(max(1, min($this->guestPollInterval, (int) ceil($remaining))));
+        }
+    }
+
+    /**
+     * F-08: wait for the task named by an API response (UPID), or, when the API returned none,
+     * for the guest to reach $fallbackStatus. Bounded either way.
+     *
+     * @throws ProxmoxException On a failed or timed-out task, or when the status was not reached.
+     */
+    private function awaitGuestTask(string $node, int $vmid, mixed $upid, int $timeoutSeconds, string $fallbackStatus): void
+    {
+        if ($this->isUpid($upid)) {
+            $this->waitForTaskCompletion($node, $upid, $timeoutSeconds, $this->guestPollInterval);
+            return;
+        }
+        if (!$this->awaitGuestStatus($node, $vmid, $fallbackStatus, $timeoutSeconds)) {
+            throw new TaskTimeoutException("Guest did not reach '{$fallbackStatus}' within {$timeoutSeconds}s.");
+        }
+    }
+
+    /**
+     * F-08: stop a running guest. Tries a graceful status/shutdown (bounded by
+     * $guestShutdownTimeout) first and only falls back to the hard status/stop if that fails or
+     * times out. Returns 'shutdown' or 'stop' for the method that finally worked.
+     *
+     * @throws ProxmoxException If even the hard stop fails or does not finish in time.
+     */
+    private function stopGuestBounded(string $node, int $vmid): string
+    {
+        try {
+            $response = $this->client->post(
+                "nodes/{$node}/qemu/{$vmid}/status/shutdown",
+                ['timeout' => $this->guestShutdownTimeout]
+            );
+            $this->awaitGuestTask($node, $vmid, $response['data'] ?? null, $this->guestShutdownTimeout + 10, 'stopped');
+            return 'shutdown';
+        } catch (Exception) {
+            // Graceful shutdown refused / failed / timed out (no ACPI, no agent, hung guest): hard stop.
+        }
+
+        $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/stop");
+        $this->awaitGuestTask($node, $vmid, $response['data'] ?? null, $this->guestTaskTimeout, 'stopped');
+        return 'stop';
+    }
+
+    /** F-08: start a guest and wait (bounded) for the start task. Returns the raw start response. */
+    private function startGuestBounded(string $node, int $vmid): array
+    {
+        $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/start");
+        if ($this->isUpid($response['data'] ?? null)) {
+            $this->waitForTaskCompletion($node, $response['data'], $this->guestTaskTimeout, $this->guestPollInterval);
+        }
+        return $response;
+    }
+
+    /**
+     * F-08: ping the guest agent, retrying until $guestAgentTimeout. Rethrows the last failure.
+     *
+     * @throws Exception
+     */
+    private function pingGuestAgentBounded(string $node, int $vmid): array
+    {
+        $deadline = $this->monotonicSeconds() + $this->guestAgentTimeout;
+        while (true) {
+            try {
+                return $this->client->get("nodes/{$node}/qemu/{$vmid}/agent/ping");
+            } catch (Exception $e) {
+                $remaining = $deadline - $this->monotonicSeconds();
+                if ($remaining <= 0) {
+                    throw $e;
+                }
+                $this->sleepSeconds(max(1, min($this->guestPollInterval, (int) ceil($remaining))));
+            }
+        }
+    }
+
+    /**
+     * Fix non-running guest agent
+     *
+     * F-08: the guest's existing ostype is no longer overwritten (pass $ostype to set one); a
+     * running guest is shut down gracefully (hard stop only as a fallback) and restarted with
+     * bounded task polling instead of fixed sleeps.
+     *
+     * @param string|null $ostype Optional Proxmox ostype to set; null leaves it untouched.
+     */
+    public function fixGuestAgent(string $node, int $vmid, ?string $ostype = null): array
     {
         $this->validateSegment($node, 'node');
+        $ostypeParams = $this->guestOstypeParams($ostype);
         try {
             // 1. First ensure agent is enabled in config with correct settings
             $configResult = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", [
                 'agent' => 'enabled=1',
-                'ostype' => 'l26'  // Linux 2.6+ kernel
-            ]);
+            ] + $ostypeParams);
 
             // 2. Get current VM status
             $vmStatus = $this->client->get("nodes/{$node}/qemu/{$vmid}/status/current");
@@ -4585,22 +4814,18 @@ class ProxmoxNode
 
             // 3. If VM is running, need to restart it
             if ($isRunning) {
-                // Stop VM
-                $this->client->post("nodes/{$node}/qemu/{$vmid}/status/stop");
+                // Graceful shutdown (hard stop only as fallback), bounded task wait
+                $this->stopGuestBounded($node, $vmid);
 
-                // Wait for VM to stop
-                sleep(15);
-
-                // Start VM
-                $this->client->post("nodes/{$node}/qemu/{$vmid}/status/start");
-
-                // Wait for VM to start
-                sleep(20);
+                // Start VM and wait for the start task
+                $this->startGuestBounded($node, $vmid);
             }
 
-            // 4. Check agent status after restart
+            // 4. Check agent status after restart (bounded retry while the guest boots)
             try {
-                $agentStatus = $this->client->get("nodes/{$node}/qemu/{$vmid}/agent/ping");
+                $agentStatus = $isRunning
+                    ? $this->pingGuestAgentBounded($node, $vmid)
+                    : $this->client->get("nodes/{$node}/qemu/{$vmid}/agent/ping");
                 $agentRunning = true;
             } catch (Exception $e) {
                 $agentRunning = false;
@@ -4663,16 +4888,20 @@ class ProxmoxNode
 
     /**
      * Enable QEMU Guest Agent for a VM
+     *
+     * F-08: the guest's existing ostype is no longer overwritten; pass $ostype to set one.
+     *
+     * @param string|null $ostype Optional Proxmox ostype to set; null leaves it untouched.
      */
-    public function enableGuestAgent(string $node, int $vmid): array
+    public function enableGuestAgent(string $node, int $vmid, ?string $ostype = null): array
     {
         $this->validateSegment($node, 'node');
+        $ostypeParams = $this->guestOstypeParams($ostype);
         try {
             // Enable QEMU Guest Agent in VM configuration
             $config = [
                 'agent' => 1,  // Enable QEMU Guest Agent
-                'ostype' => 'l26'  // Linux 2.6+/3.x/4.x Kernel
-            ];
+            ] + $ostypeParams;
 
             $result = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", $config);
 
@@ -4689,30 +4918,34 @@ class ProxmoxNode
 
     /**
      * Configure and start QEMU Guest Agent
+     *
+     * F-08: the guest's existing ostype is no longer overwritten (pass $ostype to set one); the
+     * guest is only stopped when it is running, gracefully first (hard stop only as a fallback),
+     * and all waiting is bounded task/agent polling instead of fixed sleeps.
+     *
+     * @param string|null $ostype Optional Proxmox ostype to set; null leaves it untouched.
      */
-    public function configureGuestAgent(string $node, int $vmid): array
+    public function configureGuestAgent(string $node, int $vmid, ?string $ostype = null): array
     {
         $this->validateSegment($node, 'node');
+        $ostypeParams = $this->guestOstypeParams($ostype);
         try {
             // First, enable the QEMU guest agent in VM config
             $configResult = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", [
                 'agent' => 'enabled=1,fstrim_cloned_disks=1',
-                'ostype' => 'l26'  // For Linux VMs
-            ]);
+            ] + $ostypeParams);
 
             // Stop the VM if it's running
-            $this->client->post("nodes/{$node}/qemu/{$vmid}/status/stop");
+            $current = $this->client->get("nodes/{$node}/qemu/{$vmid}/status/current");
+            if (($current['data']['status'] ?? null) === 'running') {
+                $this->stopGuestBounded($node, $vmid);
+            }
 
-            // Wait for VM to stop
-            sleep(10);
+            // Start the VM to apply changes and wait for the start task
+            $startResult = $this->startGuestBounded($node, $vmid);
 
-            // Start the VM to apply changes
-            $startResult = $this->client->post("nodes/{$node}/qemu/{$vmid}/status/start");
-
-            // Check agent status (might take a few seconds to initialize)
-            sleep(20);  // Wait for VM to fully start
-
-            $status = $this->client->get("nodes/{$node}/qemu/{$vmid}/agent/ping");
+            // Agent may need a few seconds to initialise: bounded retry
+            $status = $this->pingGuestAgentBounded($node, $vmid);
 
             return [
                 'success' => true,
@@ -4772,21 +5005,26 @@ class ProxmoxNode
             }
 
             // Format the network configuration
+            // F-04: ',' / '=' / CR / LF in any interpolated value would inject
+            // extra ipconfig0 properties.
             $netConfig = [
                 'ipconfig0' => sprintf(
                     'ip=%s/%s,gw=%s',
-                    $networkParams['ip'],
-                    $networkParams['subnet_mask'] ?? '24',
-                    $networkParams['gateway']
+                    $this->cloudInitValue($networkParams['ip'], 'ip'),
+                    $this->cloudInitValue($networkParams['subnet_mask'] ?? '24', 'subnet_mask'),
+                    $this->cloudInitValue($networkParams['gateway'], 'gateway')
                 )
             ];
 
-            // Add optional network parameters
-            if (isset($networkParams['nameserver'])) {
-                $netConfig['nameserver'] = $networkParams['nameserver'];
-            }
-            if (isset($networkParams['searchdomain'])) {
-                $netConfig['searchdomain'] = $networkParams['searchdomain'];
+            // Add optional network parameters (separate API parameters, not
+            // part of the property string: only control characters are refused).
+            foreach (['nameserver', 'searchdomain'] as $optKey) {
+                if (isset($networkParams[$optKey])) {
+                    if (! is_string($networkParams[$optKey]) || preg_match('/[\x00-\x08\x0A-\x1F\x7F]/', $networkParams[$optKey])) {
+                        throw new \InvalidArgumentException("Invalid cloud-init value for [{$optKey}].");
+                    }
+                    $netConfig[$optKey] = $networkParams[$optKey];
+                }
             }
 
             // Apply network configuration
@@ -4887,10 +5125,17 @@ class ProxmoxNode
      * @return array
      * @throws Exception
      */
-    public function setVMConfig(string $node, int $vmid, array $params): array
+    public function setVMConfig(string $node, int $vmid, #[\SensitiveParameter] array $params): array
     {
         $this->validateSegment($node, 'node');
-        return $this->client->post("nodes/{$node}/qemu/{$vmid}/config", $params);
+        $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", $params);
+
+        // F-11: documented ResponseHelper envelope (was the raw ['data' => ...] payload).
+        if (!ResponseHelper::hasData($response)) {
+            return ResponseHelper::generate(false, 'Failed to set VM config!');
+        }
+
+        return ResponseHelper::generate(true, 'VM config updated successfully', $response['data']);
     }
 
     /**
@@ -4910,6 +5155,11 @@ class ProxmoxNode
 
         $this->validateSegment($node, 'node');
         try {
+            // F-06: strict whole-number size (GiB, or K/M/G/T converted to a
+            // whole GiB). Never strip characters: '10.5G' used to become 105
+            // and '-20G' became 20. Invalid sizes fail here, before any API call.
+            $size = $this->diskSizeGiB($params['size'], 'size');
+
             // Get current VM configuration
             $config = $this->client->get("nodes/{$node}/qemu/{$vmid}/config");
 
@@ -4922,13 +5172,20 @@ class ProxmoxNode
             }
 
             // Prepare disk parameters - Fixed format
-//            $size = preg_match('/^\d+G$/', $params['size']) ? $params['size'] : "{$params['size']}";
-            $size = preg_replace('/\D/', '', $params['size']);;
+            // (size already validated above)
 
             // Base disk specification - Note the "volume=0" format
             $diskParams = [
                 "scsi{$nextId}" => "{$params['storage']}:{$size}"
             ];
+
+            // LPX-SAST-005: reject ',' / '=' delimiter injection into the disk option string.
+            $this->validateSegment((string) $params['storage'], 'storage');
+            foreach (['format', 'cache', 'iothread'] as $optKey) {
+                if (isset($params[$optKey])) {
+                    $this->validateSegment((string) $params[$optKey], $optKey);
+                }
+            }
 
             // Add optional parameters
             $optionalParams = '';
@@ -4944,11 +5201,9 @@ class ProxmoxNode
 
             // Append optional parameters if any exist
             if (!empty($optionalParams)) {
+                // LPX-SAST-005: no longer overwrites the VM's net0 / boot order
+                // when attaching an additional disk.
                 $diskParams["scsi{$nextId}"] .= $optionalParams;
-                $diskParams["net0"] = 'virtio,bridge=vmbr0,firewall=1';
-
-                $diskParams['boot'] = "order=scsi{$nextId};net0";
-//                $diskParams['boot'] = "order=ide2;scsi{$nextId};net0";
             }
 
             // Apply configuration
@@ -4977,8 +5232,9 @@ class ProxmoxNode
     public function detachDisk(string $node, int $vmid, string $disk, bool $type = false)
     {
         $this->validateSegment($node, 'node');
+        // F-03: only a single bare disk slot may reach PVE's comma/space separated `delete` list.
+        $disk = $this->diskSlot($disk, 'disk');
         try {
-            // API endpoint to remove a disk
             $result = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", [
                 'delete' => $disk, // Specify the disk to delete (e.g., 'scsi0')
                 'force' => $type
@@ -5023,7 +5279,7 @@ class ProxmoxNode
      * @return array{private_key_path:string,public_key_path:string,public_key:string,passphrase_generated:bool,passphrase?:string}
      * @throws Exception
      */
-    public function generateSSHKey(?string $name = null, ?string $passphrase = null): array
+    public function generateSSHKey(?string $name = null, #[\SensitiveParameter] ?string $passphrase = null): array
     {
         $safeName = $name !== null ? preg_replace('/[^a-z0-9]+/i', '_', strtolower($name)) : '';
         if ($safeName === '') {
@@ -5115,6 +5371,12 @@ class ProxmoxNode
      */
     private function sshKeyStorageRoot(): string
     {
+        return $this->appKeyStorageRoot() ?? $this->fallbackKeyStorageRoot();
+    }
+
+    /** Host-app storage root for key material, or null outside a booted Laravel app. */
+    private function appKeyStorageRoot(): ?string
+    {
         if (function_exists('app')) {
             try {
                 $app = app();
@@ -5122,11 +5384,64 @@ class ProxmoxNode
                     return rtrim($app->storagePath(), '/') . '/app/proxmox-ssh-keys';
                 }
             } catch (\Throwable) {
-                // No booted container available — fall through to the temp-dir default.
+                // No booted container available — caller falls back to a private temp dir.
             }
         }
 
-        return rtrim(sys_get_temp_dir(), '/') . '/proxmox-ssh-keys';
+        return null;
+    }
+
+    /**
+     * F-10 (CWE-459): the temp-dir fallback used to be the fixed, world-guessable
+     * /tmp/proxmox-ssh-keys shared by every caller on the host. It is now a
+     * private (0700) directory with an unpredictable name, created on first use
+     * and reused only by this ProxmoxNode instance. mkdir() without recursion
+     * fails if the name already exists, so a pre-planted path is never adopted.
+     *
+     * @throws Exception
+     */
+    private function fallbackKeyStorageRoot(): string
+    {
+        if ($this->tmpKeyRoot !== null && is_dir($this->tmpKeyRoot) && !is_link($this->tmpKeyRoot)) {
+            return $this->tmpKeyRoot;
+        }
+
+        $root = rtrim(sys_get_temp_dir(), '/') . '/proxmox-ssh-keys-' . bin2hex(random_bytes(16));
+        if (!@mkdir($root, 0700) && !is_dir($root)) {
+            throw new Exception('Unable to create a private SSH key directory.');
+        }
+        @chmod($root, 0700);
+
+        return $this->tmpKeyRoot = $root;
+    }
+
+    /**
+     * F-10: remove a key pair that was generated for a VM that was never
+     * created, plus the per-call temp directory when it is now empty.
+     * Best effort and never throws, so it cannot mask the original failure.
+     *
+     * @param array<string, mixed> $generatedKey
+     */
+    private function discardGeneratedKey(array $generatedKey): void
+    {
+        $dirs = [];
+        foreach (['private_key_path', 'public_key_path'] as $field) {
+            $path = $generatedKey[$field] ?? null;
+            if (!is_string($path) || $path === '') {
+                continue;
+            }
+            if (is_file($path) || is_link($path)) {
+                @unlink($path);
+            }
+            $dirs[dirname($path)] = true;
+        }
+
+        // Only the private temp-dir fallback is removed; a host-app storage root persists.
+        if ($this->tmpKeyRoot !== null && isset($dirs[$this->tmpKeyRoot])) {
+            if (@rmdir($this->tmpKeyRoot)) {
+                $this->tmpKeyRoot = null;
+            }
+        }
     }
 
     /**
@@ -5160,7 +5475,7 @@ class ProxmoxNode
      *
      * @throws Exception
      */
-    private function writeNewKeyFile(string $path, string $contents, int $mode, string $keyName): void
+    private function writeNewKeyFile(string $path, #[\SensitiveParameter] string $contents, int $mode, string $keyName): void
     {
         $handle = @fopen($path, 'xb');
         if ($handle === false) {
@@ -5237,6 +5552,9 @@ class ProxmoxNode
     public function attachSSHKey(string $node, int $vmid, string $publicKey): array
     {
         $this->validateSegment($node, 'node');
+        // F-04: single key on one line, percent-encoded the way PVE expects.
+        $encodedKey = $this->encodedSshKey($publicKey, 'publicKey');
+
         // First check if VM exists and uses cloud-init
         $vmConfig = $this->client->get("nodes/{$node}/qemu/{$vmid}/config");
 
@@ -5244,13 +5562,9 @@ class ProxmoxNode
             throw new Exception("VM {$vmid} not found on node {$node}");
         }
 
-
-        // Clean up the public key
-        $publicKey = trim($publicKey);
-
         // Set SSH key in cloud-init config
         return $this->setVMConfig($node, $vmid, [
-            'sshkeys' => $publicKey
+            'sshkeys' => $encodedKey
         ]);
     }
 
@@ -5265,56 +5579,98 @@ class ProxmoxNode
      */
     public function createUbuntuVMWithSSH(
         string  $node,
-        array   $params,
+        #[\SensitiveParameter] array   $params,
         ?string $sshKey = null
     ): array
     {
         // Generate new SSH key if none provided
-        if ($sshKey === null) {
-            // LPX-005: generateSSHKey() now refuses to overwrite an existing
-            // key pair, so the auto-generated name gets a server-controlled
-            // random suffix — re-provisioning a VM with a reused name must
-            // neither clobber the earlier VM's keys nor fail.
-            $keyName = ($params['name'] ?? 'vm') . '-' . bin2hex(random_bytes(4));
-            $sshKeyPair = $this->generateSSHKey($keyName);
-
-            if (!($sshKeyPair['success'] ?? false) || !isset($sshKeyPair['data']['public_key'])) {
-                throw new Exception('Failed to generate SSH key for VM: ' . ($sshKeyPair['message'] ?? 'unknown error'));
-            }
-
-            $sshKey = $sshKeyPair['data']['public_key'];
+        if ($sshKey !== null) {
+            // F-04: fail before anything is generated/sent when a supplied key is malformed.
+            $this->encodedSshKey($sshKey, 'sshKey');
         }
 
-        // Add cloud-init specific defaults
-        $cloudInitDefaults = [
-            'ostype' => 'other',
-            'cores' => 2,
-            'memory' => 2048,
-            'cpu' => 'host',
-            'agent' => 1,
-            'bios' => 'ovmf',
-            'net0' => 'virtio,bridge=vmbr0',
-            'cicustom' => 'user=local:snippets/cloud-init-user.yml',
-            'ipconfig0' => 'ip=dhcp',
-            'sshkeys' => urlencode($sshKey)
-        ];
+        $created = false;
+        try {
+            if ($sshKey === null) {
+                // F-10: without host-app storage each call gets its own private
+                // temp dir (never one shared with an earlier call's keys).
+                if ($this->appKeyStorageRoot() === null) {
+                    $this->tmpKeyRoot = null;
+                }
 
-        $params = array_merge($cloudInitDefaults, $params);
+                // LPX-005: generateSSHKey() now refuses to overwrite an existing
+                // key pair, so the auto-generated name gets a server-controlled
+                // random suffix — re-provisioning a VM with a reused name must
+                // neither clobber the earlier VM's keys nor fail.
+                $keyName = ($params['name'] ?? 'vm') . '-' . bin2hex(random_bytes(4));
+                $sshKeyPair = $this->generateSSHKey($keyName);
 
-        // Create VM
-        $result = $this->createVM($node, $params);
+                if (!($sshKeyPair['success'] ?? false) || !isset($sshKeyPair['data']['public_key'])) {
+                    throw new Exception('Failed to generate SSH key for VM: ' . ($sshKeyPair['message'] ?? 'unknown error'));
+                }
 
-        return array_merge($result, [
-            'ssh_key' => $sshKey
-        ]);
+                $sshKey = $sshKeyPair['data']['public_key'];
+                // LPX-SAST-002: keep the key-pair metadata (incl. the one-time random
+                // passphrase) so the caller can actually use the generated private key.
+                $generatedKey = [
+                    'private_key_path'     => $sshKeyPair['data']['private_key_path'] ?? null,
+                    'public_key_path'      => $sshKeyPair['data']['public_key_path'] ?? null,
+                    'passphrase_generated' => $sshKeyPair['data']['passphrase_generated'] ?? false,
+                    'passphrase'           => $sshKeyPair['data']['passphrase'] ?? null,
+                ];
+            }
+
+            // Add cloud-init specific defaults
+            $cloudInitDefaults = [
+                'ostype' => 'other',
+                'cores' => 2,
+                'memory' => 2048,
+                'cpu' => 'host',
+                'agent' => 1,
+                'bios' => 'ovmf',
+                'net0' => 'virtio,bridge=vmbr0',
+                'cicustom' => 'user=local:snippets/cloud-init-user.yml',
+                'ipconfig0' => 'ip=dhcp',
+                'sshkeys' => $this->encodedSshKey($sshKey, 'sshKey') // LPX-SAST-002: urlencode() turns spaces into '+', which PVE does not decode
+            ];
+
+            $params = array_merge($cloudInitDefaults, $params);
+
+            // Create VM
+            $result = $this->createVM($node, $params);
+            $created = (bool) ($result['success'] ?? false);
+
+            $out = array_merge($result, [
+                'ssh_key' => $sshKey
+            ]);
+            // F-10: when the VM was not created the key pair is deleted below,
+            // so advertising its paths would only point at nothing.
+            if (isset($generatedKey) && $created) {
+                $out['generated_key'] = $generatedKey;
+            }
+
+            return $out;
+        } finally {
+            // F-10 (CWE-459): never leave an unused private key on disk after a
+            // failed (exception or failure envelope) VM creation.
+            if (!$created && isset($generatedKey)) {
+                $this->discardGeneratedKey($generatedKey);
+            }
+        }
     }
 
     public function configureVMCloudInitNetwork(string $node, int $vmid, $ip, $gateway, $netmask)
     {
         $this->validateSegment($node, 'node');
 
+        // F-04: reject ',' / '=' / CR / LF so no extra ipconfig0 property can be injected.
         $params = [
-            "ipconfig0" => "ip={$ip}/{$netmask},gw={$gateway}"
+            "ipconfig0" => sprintf(
+                'ip=%s/%s,gw=%s',
+                $this->cloudInitValue($ip, 'ip'),
+                $this->cloudInitValue($netmask, 'netmask'),
+                $this->cloudInitValue($gateway, 'gateway')
+            )
         ];
 
         $response = $this->client->put("nodes/{$node}/qemu/{$vmid}/config", $params);
@@ -5341,19 +5697,20 @@ class ProxmoxNode
     /**
      * @throws Exception
      */
-    public function updateVmConfig(string $node, int $vmid, $params)
+    public function updateVmConfig(string $node, int $vmid, #[\SensitiveParameter] $params)
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/{$node}/qemu/{$vmid}/config", $params);
 
+        // LPX-SAST-001: predicate was inverted by LPX-004 (success reported as failure).
         if (!ResponseHelper::hasData($response)) {
-            $successResponse = [
-                'node' => $node,
-                'vmid' => $vmid,
-            ];
-            return ResponseHelper::generate(true, 'Config updated successfully', $successResponse);
+            return ResponseHelper::generate(false, 'Config update failed!');
         }
-        return ResponseHelper::generate(false, 'Config update failed!', $response['data']);
+        $successResponse = [
+            'node' => $node,
+            'vmid' => $vmid,
+        ];
+        return ResponseHelper::generate(true, 'Config updated successfully', $successResponse);
     }
 
     /**
@@ -5369,14 +5726,15 @@ class ProxmoxNode
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/config", $params);
 
+        // LPX-SAST-001: predicate was inverted by LPX-004 (success reported as failure).
         if (!ResponseHelper::hasData($response)) {
-            $successResponse = [
-                'node' => $node,
-                'vmid' => $vmid,
-            ];
-            return ResponseHelper::generate(true, 'Config updated successfully', $successResponse);
+            return ResponseHelper::generate(false, 'Config update failed!');
         }
-        return ResponseHelper::generate(false, 'Config update failed!', $response['data']);
+        $successResponse = [
+            'node' => $node,
+            'vmid' => $vmid,
+        ];
+        return ResponseHelper::generate(true, 'Config updated successfully', $successResponse);
     }
 
     /**
@@ -5389,7 +5747,7 @@ class ProxmoxNode
         $response = $this->client->get("nodes/{$node}/network");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'Network list fail!', $response['data']);
+            return ResponseHelper::generate(false, 'Network list fail!', $response['data'] ?? null);
         }
         return ResponseHelper::generate(true, 'Network list', $response['data']);
     }
@@ -5398,7 +5756,14 @@ class ProxmoxNode
     public function applyCloudInitVM(string $node, int $vmid)
     {
         $this->validateSegment($node, 'node');
-        return $this->client->post("nodes/{$node}/qemu/{$vmid}/cloudinit");
+        $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/cloudinit");
+
+        // F-11: documented ResponseHelper envelope (was the raw ['data' => ...] payload).
+        if (!ResponseHelper::hasData($response)) {
+            return ResponseHelper::generate(false, 'Failed to apply cloud-init!');
+        }
+
+        return ResponseHelper::generate(true, 'Cloud-init applied successfully', $response['data']);
     }
 
     /**
@@ -5414,7 +5779,7 @@ class ProxmoxNode
         $response = $this->client->delete("nodes/$node/qemu/$vmid", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Destroy the vm fail!', $response['data']);
+            return ResponseHelper::generate(false, 'Destroy the vm fail!', $response['data'] ?? null);
         }
         return ResponseHelper::generate(true, 'Destroyed the vm', $response['data']);
     }
@@ -5439,27 +5804,20 @@ class ProxmoxNode
         }
 
         // If VM is running and force is true, stop it first
-        if ($vmStatus['data']['status'] === 'running') {
+        if (($vmStatus['data']['status'] ?? null) === 'running') {
             if (!$force) {
                 throw new Exception("Cannot delete running VM. Either stop the VM first or use force option.");
             }
 
-            // Stop the VM
-            $this->stopVM($node, $vmid);
+            // F-08: graceful shutdown first (hard stop as fallback), bounded task wait
+            try {
+                $this->stopGuestBounded($node, $vmid);
+            } catch (ProxmoxException $e) {
+                throw new Exception("Failed to stop VM {$vmid} within timeout period", previous: $e);
+            }
 
-            // Wait for VM to stop (max 30 seconds)
-            $timeout = 30;
-            $start = time();
-            do {
-                sleep(2);
-                $currentStatus = $this->client->get("nodes/{$node}/qemu/{$vmid}/status/current");
-                if ($currentStatus['data']['status'] === 'stopped') {
-                    break;
-                }
-            } while (time() - $start < $timeout);
-
-            // Check if VM actually stopped
-            if ($currentStatus['data']['status'] !== 'stopped') {
+            // Check if VM actually stopped (bounded poll, monotonic clock)
+            if (!$this->awaitGuestStatus($node, $vmid, 'stopped', $this->guestTaskTimeout)) {
                 throw new Exception("Failed to stop VM {$vmid} within timeout period");
             }
         }
@@ -5517,7 +5875,7 @@ class ProxmoxNode
         ];
     }
 
-    public function updateCredential(string $node, int $vmid, $payload)
+    public function updateCredential(string $node, int $vmid, #[\SensitiveParameter] $payload)
     {
         $params = [
             'cipassword' => $payload['password']
@@ -5543,7 +5901,7 @@ class ProxmoxNode
         }
     }
 
-    public function injectSSHCredentials(string $node, int $vmid, $username, $password, $sshKey = null)
+    public function injectSSHCredentials(string $node, int $vmid, $username, #[\SensitiveParameter] $password, $sshKey = null)
     {
         $payload = [
             'ciuser' => $username,
@@ -5551,19 +5909,34 @@ class ProxmoxNode
         ];
 
         if ($sshKey) {
-            $payload['sshkeys'] = $sshKey;
+            // F-04: same validation + encoding as attachSSHKey()/createUbuntuVMWithSSH()
+            $payload['sshkeys'] = $this->encodedSshKey($sshKey, 'sshKey');
         }
 
         $this->validateSegment($node, 'node');
         $url = "/nodes/{$node}/qemu/{$vmid}/config";
-        return $this->client->post($url, $payload);
+        $response = $this->client->post($url, $payload);
+
+        // F-11: documented ResponseHelper envelope (was the raw ['data' => ...] payload).
+        if (!ResponseHelper::hasData($response)) {
+            return ResponseHelper::generate(false, 'Failed to inject SSH credentials!');
+        }
+
+        return ResponseHelper::generate(true, 'SSH credentials injected successfully', $response['data']);
     }
 
     public function rebuildCloudInit(string $node, int $vmid)
     {
         $this->validateSegment($node, 'node');
         $url = "/nodes/{$node}/qemu/{$vmid}/cloudinit";
-        return $this->client->post($url);
+        $response = $this->client->post($url);
+
+        // F-11: documented ResponseHelper envelope (was the raw ['data' => ...] payload).
+        if (!ResponseHelper::hasData($response)) {
+            return ResponseHelper::generate(false, 'Failed to rebuild cloud-init!');
+        }
+
+        return ResponseHelper::generate(true, 'Cloud-init rebuilt successfully', $response['data']);
     }
 
     /**
@@ -5576,7 +5949,7 @@ class ProxmoxNode
         $response = $this->client->get("nodes/{$node}/disks");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'Disk list failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Disk list failed!', $response['data'] ?? null);
         }
 
         $successResponse = [
@@ -5599,7 +5972,7 @@ class ProxmoxNode
         $response = $this->client->get("nodes/{$node}/disks/{$type}");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'Disk fetch failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Disk fetch failed!', $response['data'] ?? null);
         }
 
         $successResponse = [
@@ -5622,7 +5995,7 @@ class ProxmoxNode
         $response = $this->client->post("nodes/{$node}/disks/{$type}", $params);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Disk fetch failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Disk fetch failed!', $response['data'] ?? null);
         }
 
         $successResponse = [
@@ -5646,7 +6019,7 @@ class ProxmoxNode
         $response = $this->client->delete("nodes/{$node}/disks/{$type}/{$name}");
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Disk delete failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Disk delete failed!', $response['data'] ?? null);
         }
 
         $successResponse = [
@@ -5663,12 +6036,13 @@ class ProxmoxNode
      */
     public function vmMonitor(string $node, int $vmid, $params)
     {
-        $params = ['command' => 'info'];
+        // LPX-SAST-005: honour caller params; default only when none given.
+        $params = $params ?: ['command' => 'info'];
         $this->validateSegment($node, 'node');
         $response = $this->client->post("nodes/{$node}/qemu/{$vmid}/monitor", $params);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Failed to fetch monitoring data!', $response['data']);
+            return ResponseHelper::generate(false, 'Failed to fetch monitoring data!', $response['data'] ?? null);
         }
 
         $successResponse = [
@@ -5806,10 +6180,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/aplinfo");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'aplinfo fetch failed!', $response['data']);
+            return ResponseHelper::generate(false, 'aplinfo fetch failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Aplinfo retrieved successfully', $response);
+        return ResponseHelper::generate(true, 'Aplinfo retrieved successfully', $response['data']);
     }
 
     /**
@@ -5825,10 +6199,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/aplinfo", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'aplinfo fetch failed!', $response['data']);
+            return ResponseHelper::generate(false, 'aplinfo fetch failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Aplinfo retrieved successfully', $response);
+        return ResponseHelper::generate(true, 'Aplinfo retrieved successfully', $response['data']);
     }
 
     /**
@@ -5843,10 +6217,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/dns");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'dns fetch failed!', $response['data']);
+            return ResponseHelper::generate(false, 'dns fetch failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'dns retrieved successfully', $response);
+        return ResponseHelper::generate(true, 'dns retrieved successfully', $response['data']);
     }
 
     /**
@@ -5862,10 +6236,10 @@ class ProxmoxNode
         $response = $this->client->put("nodes/$node/dns", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'set Dns failed!', $response['data']);
+            return ResponseHelper::generate(false, 'set Dns failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'setDns successfully', $response);
+        return ResponseHelper::generate(true, 'setDns successfully', $response['data']);
     }
 
     /**
@@ -5881,10 +6255,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/execute", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Execute failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Execute failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Execute successfully', $response);
+        return ResponseHelper::generate(true, 'Execute successfully', $response['data']);
     }
 
     /**
@@ -5900,10 +6274,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/migrateall", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Migrate failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Migrate failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Migrate successfully', $response);
+        return ResponseHelper::generate(true, 'Migrate successfully', $response['data']);
     }
 
     /**
@@ -5918,10 +6292,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/netstat");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'netstat failed!', $response['data']);
+            return ResponseHelper::generate(false, 'netstat failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'netstat successfully', $response);
+        return ResponseHelper::generate(true, 'netstat successfully', $response['data']);
     }
 
     /**
@@ -5936,10 +6310,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/report");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'report failed!', $response['data']);
+            return ResponseHelper::generate(false, 'report failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'report successfully', $response);
+        return ResponseHelper::generate(true, 'report successfully', $response['data']);
     }
 
     /**
@@ -5958,10 +6332,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/rrd", $optional);
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'RRD statistics failed!', $response['data']);
+            return ResponseHelper::generate(false, 'RRD statistics failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'RRD statistics successfully', $response);
+        return ResponseHelper::generate(true, 'RRD statistics successfully', $response['data']);
     }
 
     /**
@@ -5978,10 +6352,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/rrddata", $optional);
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'rrddata statistics failed!', $response['data']);
+            return ResponseHelper::generate(false, 'rrddata statistics failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'rrddata statistics successfully', $response);
+        return ResponseHelper::generate(true, 'rrddata statistics successfully', $response['data']);
     }
 
     /**
@@ -6001,7 +6375,7 @@ class ProxmoxNode
             return ResponseHelper::generate(false, 'SPICE shell failed!');
         }
 
-        return ResponseHelper::generate(true, 'SPICE shell successfully', $response);
+        return ResponseHelper::generate(true, 'SPICE shell successfully', $response['data']);
     }
 
     /**
@@ -6017,10 +6391,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/startall", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Start all VMs failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Start all VMs failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Start all VMs successfully', $response);
+        return ResponseHelper::generate(true, 'Start all VMs successfully', $response['data']);
     }
 
     /**
@@ -6036,10 +6410,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/status", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Reboot node failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Reboot node failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Reboot node successfully', $response);
+        return ResponseHelper::generate(true, 'Reboot node successfully', $response['data']);
     }
 
     /**
@@ -6055,10 +6429,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/stopall", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Reboot node failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Reboot node failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Stop node successfully', $response);
+        return ResponseHelper::generate(true, 'Stop node successfully', $response['data']);
     }
 
     /**
@@ -6073,10 +6447,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/subscription");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'subscription node failed!', $response['data']);
+            return ResponseHelper::generate(false, 'subscription node failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'subscription node successfully', $response);
+        return ResponseHelper::generate(true, 'subscription node successfully', $response['data']);
     }
 
     /**
@@ -6092,10 +6466,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/subscription", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'subscription update failed!', $response['data']);
+            return ResponseHelper::generate(false, 'subscription update failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'subscription update successfully', $response);
+        return ResponseHelper::generate(true, 'subscription update successfully', $response['data']);
     }
 
     /**
@@ -6105,16 +6479,16 @@ class ProxmoxNode
      * @param array $data
      * @throws Exception
      */
-    public function setSubscription(string $node, array $data)
+    public function setSubscription(string $node, #[\SensitiveParameter] array $data)
     {
         $this->validateSegment($node, 'node');
         $response = $this->client->put("nodes/$node/subscription", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Set subscription failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Set subscription failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Set subscription successfully', $response);
+        return ResponseHelper::generate(true, 'Set subscription successfully', $response['data']);
     }
 
     /**
@@ -6138,10 +6512,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/syslog", $optional);
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'Read system log failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Read system log failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Read system log successfully', $response);
+        return ResponseHelper::generate(true, 'Read system log successfully', $response['data']);
     }
 
     /**
@@ -6156,10 +6530,10 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/time");
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'Read server time failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Read server time failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Read server time successfully', $response);
+        return ResponseHelper::generate(true, 'Read server time successfully', $response['data']);
     }
 
     /**
@@ -6175,10 +6549,10 @@ class ProxmoxNode
         $response = $this->client->put("nodes/$node/time", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'PUT time zone failed!', $response['data']);
+            return ResponseHelper::generate(false, 'PUT time zone failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'PUT time zone successfully', $response);
+        return ResponseHelper::generate(true, 'PUT time zone successfully', $response['data']);
     }
 
     /**
@@ -6194,10 +6568,10 @@ class ProxmoxNode
         $response = $this->client->post("nodes/$node/vncshell", $data);
 
         if (!ResponseHelper::hasData($response)) {
-            return ResponseHelper::generate(false, 'Creates a VNC Shell proxy failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Creates a VNC Shell proxy failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Creates a VNC Shell proxy successfully', $response);
+        return ResponseHelper::generate(true, 'Creates a VNC Shell proxy successfully', $response['data']);
     }
 
     /**
@@ -6207,7 +6581,7 @@ class ProxmoxNode
      * @param integer|null $port Port number returned by previous vncproxy call.
      * @param string|null $vncticket Ticket from previous call to vncproxy.
      */
-    public function vNCWebSocket(string $node, ?int $port = null, ?string $vncticket = null)
+    public function vNCWebSocket(string $node, ?int $port = null, #[\SensitiveParameter] ?string $vncticket = null)
     {
         $optional['port'] = !empty($port) ? $port : null;
         $optional['vncticket'] = !empty($vncticket) ? $vncticket : null;
@@ -6216,9 +6590,9 @@ class ProxmoxNode
         $response = $this->client->get("nodes/$node/vncwebsocket", $optional);
 
         if (!isset($response['data'])) {
-            return ResponseHelper::generate(false, 'Opens a weksocket for VNC traffic failed!', $response['data']);
+            return ResponseHelper::generate(false, 'Opens a weksocket for VNC traffic failed!', $response['data'] ?? null);
         }
 
-        return ResponseHelper::generate(true, 'Opens a weksocket for VNC traffic successfully', $response);
+        return ResponseHelper::generate(true, 'Opens a weksocket for VNC traffic successfully', $response['data']);
     }
 }

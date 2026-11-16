@@ -2,8 +2,8 @@
 
 namespace Cycoslave\Proxmox;
 
-use Illuminate\Support\Facades\Log;
 use Cycoslave\Proxmox\Support\LogRedactor;
+use Cycoslave\Proxmox\Support\SafeLog;
 use Cycoslave\Proxmox\Traits\Authenticator;
 use Cycoslave\Proxmox\Traits\HttpClient;
 use Cycoslave\Proxmox\Exceptions\ApiException;
@@ -43,6 +43,13 @@ class ProxmoxAccess
         protected int     $timeout     = 10,
         protected ?string $pinnedPublicKey = null,
     ) {
+        // F-02 (CWE-918): host/port are interpolated into the base URL, so a
+        // value such as "attacker.example/collect?" would move the request
+        // (and its credentials) to another origin. Validate before anything
+        // else; IPv6 literals are normalised to their bracketed form.
+        $this->host = self::normaliseHost($this->host);
+        self::assertValidPort($this->port);
+
         // H2: SPKI pinning (CURLOPT_PINNEDPUBLICKEY). Empty string == no pin.
         // Accepts one or more "sha256//<base64>" hashes separated by ';'.
         $this->pinnedPublicKey = self::normalisePin($this->pinnedPublicKey);
@@ -53,12 +60,70 @@ class ProxmoxAccess
         // With a pin set, curl still enforces the public key even when
         // chain/host verification is off, so the warning only applies to the
         // unpinned verify-off case.
-        if (! $this->verifyTls && $this->pinnedPublicKey === null && ! isset(self::$tlsWarnedHosts[$host])) {
-            self::$tlsWarnedHosts[$host] = true;
+        if (! $this->verifyTls && $this->pinnedPublicKey === null && ! isset(self::$tlsWarnedHosts[$this->host])) {
+            self::$tlsWarnedHosts[$this->host] = true;
             // LPX-006 (CWE-532): log a stable endpoint id, not the host.
-            Log::warning('Proxmox: TLS verification disabled. Do not use in production.', [
-                'endpoint' => LogRedactor::endpointId($host, $this->port),
+            // F-09: SafeLog is a no-op when no Log facade root is bound.
+            SafeLog::warning('Proxmox: TLS verification disabled. Do not use in production.', [
+                'endpoint' => LogRedactor::endpointId($this->host, $this->port),
             ]);
+        }
+    }
+
+    /**
+     * F-02: accept only a bare hostname (RFC 1123), an IPv4 address or an IPv6
+     * literal. Returns the host as it must appear in the URL authority
+     * (IPv6 always bracketed). Rejects scheme, userinfo, path, query,
+     * fragment, port, zone id, whitespace and control characters.
+     *
+     * @throws \InvalidArgumentException
+     */
+    private static function normaliseHost(string $host): string
+    {
+        if ($host !== '' && strlen($host) <= 255) {
+            if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+                return $host;
+            }
+
+            $bare = $host;
+            if ($host[0] === '[' && str_ends_with($host, ']')) {
+                $bare = substr($host, 1, -1);
+            }
+            if (str_contains($bare, ':') && filter_var($bare, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+                return '[' . $bare . ']';
+            }
+
+            $labels = explode('.', $host);
+            $valid  = strlen($host) <= 253;
+            foreach ($labels as $label) {
+                if (! preg_match('/\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\z/', $label)) {
+                    $valid = false;
+                    break;
+                }
+            }
+            // An all-numeric final label is never a valid TLD; it would be a
+            // malformed/abbreviated IPv4 that curl may reinterpret.
+            if ($valid && ctype_digit(end($labels))) {
+                $valid = false;
+            }
+            if ($valid) {
+                return $host;
+            }
+        }
+
+        throw new \InvalidArgumentException(
+            'Proxmox: host must be a hostname, an IPv4 address or an IPv6 literal '
+            . '(no scheme, userinfo, port, path, query or fragment).'
+        );
+    }
+
+    /**
+     * @throws \InvalidArgumentException
+     */
+    private static function assertValidPort(int $port): void
+    {
+        if ($port < 1 || $port > 65535) {
+            throw new \InvalidArgumentException('Proxmox: port must be an integer between 1 and 65535.');
         }
     }
 
@@ -141,7 +206,7 @@ class ProxmoxAccess
      * @throws \Cycoslave\Proxmox\Exceptions\ConnectionException  On network/cURL failure
      * @throws \Cycoslave\Proxmox\Exceptions\ApiException         On HTTP 4xx/5xx or bad JSON
      */
-    public function get(string $path, array $params = []): array
+    public function get(string $path, #[\SensitiveParameter] array $params = []): array
     {
         return $this->request('GET', $path, $params);
     }
@@ -152,7 +217,7 @@ class ProxmoxAccess
      * @throws \Cycoslave\Proxmox\Exceptions\ConnectionException
      * @throws \Cycoslave\Proxmox\Exceptions\ApiException
      */
-    public function post(string $path, array $data = []): array
+    public function post(string $path, #[\SensitiveParameter] array $data = []): array
     {
         return $this->request('POST', $path, $data);
     }
@@ -163,7 +228,7 @@ class ProxmoxAccess
      * @throws \Cycoslave\Proxmox\Exceptions\ConnectionException
      * @throws \Cycoslave\Proxmox\Exceptions\ApiException
      */
-    public function put(string $path, array $data = []): array
+    public function put(string $path, #[\SensitiveParameter] array $data = []): array
     {
         return $this->request('PUT', $path, $data);
     }
@@ -174,7 +239,7 @@ class ProxmoxAccess
      * @throws \Cycoslave\Proxmox\Exceptions\ConnectionException
      * @throws \Cycoslave\Proxmox\Exceptions\ApiException
      */
-    public function delete(string $path, array $params = []): array
+    public function delete(string $path, #[\SensitiveParameter] array $params = []): array
     {
         return $this->request('DELETE', $path, $params);
     }
@@ -196,7 +261,7 @@ class ProxmoxAccess
      *
      * @throws \Exception
      */
-    protected function request(string $method, string $path, array $payload = []): array
+    protected function request(string $method, string $path, #[\SensitiveParameter] array $payload = []): array
     {
         $url     = $this->baseUrl() . '/' . ltrim($path, '/');
         $headers = $this->authHeaders();   // resolved by Authenticator trait

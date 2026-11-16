@@ -57,6 +57,20 @@ class ProxmoxManager
         $config = $this->app['config']["proxmox.connections.{$name}"]
             ?? throw new InvalidArgumentException("Proxmox connection [{$name}] is not defined.");
 
+        // F-02: fail with a clear InvalidArgumentException (not an "Undefined
+        // array key" warning / TypeError) when required keys are missing or
+        // not strings. Host/port syntax is validated by ProxmoxAccess.
+        foreach (['host', 'username'] as $key) {
+            if (! isset($config[$key]) || ! is_string($config[$key]) || $config[$key] === '') {
+                throw new InvalidArgumentException(
+                    "Proxmox connection [{$name}] requires a non-empty string '{$key}'."
+                );
+            }
+        }
+        if (isset($config['port']) && ! is_int($config['port']) && ! (is_string($config['port']) && ctype_digit($config['port']))) {
+            throw new InvalidArgumentException("Proxmox connection [{$name}] has an invalid 'port'.");
+        }
+
         return new ProxmoxAccess(
             host:        $config['host'],
             port:        (int) ($config['port']        ?? 8006),
@@ -104,6 +118,15 @@ class ProxmoxManager
         return $this->accessApis[$key] ??= new ProxmoxAccessApi($this->connection($connection));
     }
 
+    /** Container keys of the facade-backed resource singletons (see ProxmoxServiceProvider). */
+    private const FACADE_SINGLETONS = [
+        'proxmox-node',
+        'proxmox-cluster',
+        'proxmox-storage',
+        'proxmox-pools',
+        'proxmox-access-api',
+    ];
+
     /** Also update purge() to flush resource caches too */
     public function purge(?string $name = null): void
     {
@@ -123,6 +146,25 @@ class ProxmoxManager
                 $this->poolsCache[$name],
                 $this->accessApis[$name],
             );
+        }
+
+        // F-09 (CWE-613): the facade-backed singletons are bound to the
+        // *default* connection's resource objects. Without this they keep the
+        // purged ProxmoxAccess (and its cached ticket / token) alive in
+        // persistent workers (Octane, queue workers).
+        $default = $this->app['config']['proxmox.default'] ?? null;
+        if ($name === null || $default === null || $name === $default) {
+            $this->forgetFacadeSingletons();
+        }
+    }
+
+    private function forgetFacadeSingletons(): void
+    {
+        foreach (self::FACADE_SINGLETONS as $key) {
+            if (method_exists($this->app, 'forgetInstance')) {
+                $this->app->forgetInstance($key);
+            }
+            \Illuminate\Support\Facades\Facade::clearResolvedInstance($key);
         }
     }
 

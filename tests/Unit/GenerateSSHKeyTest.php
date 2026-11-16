@@ -19,6 +19,7 @@ class GenerateSSHKeyTest extends TestCase
 {
     private ProxmoxNode $node;
     private array $cleanupPaths = [];
+    private array $cleanupDirs = [];
 
     protected function setUp(): void
     {
@@ -35,6 +36,12 @@ class GenerateSSHKeyTest extends TestCase
             }
         }
         $this->cleanupPaths = [];
+        foreach (array_keys($this->cleanupDirs) as $dir) {
+            if (is_dir($dir) && !is_link($dir)) {
+                @rmdir($dir);
+            }
+        }
+        $this->cleanupDirs = [];
         parent::tearDown();
     }
 
@@ -42,6 +49,9 @@ class GenerateSSHKeyTest extends TestCase
     {
         $this->cleanupPaths[] = $data['private_key_path'] ?? null;
         $this->cleanupPaths[] = $data['public_key_path'] ?? null;
+        if (isset($data['private_key_path'])) {
+            $this->cleanupDirs[dirname($data['private_key_path'])] = true; // F-10: private per-instance temp dir
+        }
         return $data;
     }
 
@@ -302,10 +312,19 @@ class GenerateSSHKeyTest extends TestCase
 
         $this->assertNotSame($a['ssh_key'], $b['ssh_key']);
 
-        $keyDir = rtrim(sys_get_temp_dir(), '/') . '/proxmox-ssh-keys';
-        foreach (glob($keyDir . '/lpx005_vm*') ?: [] as $path) {
-            $this->cleanupPaths[] = $path;
+        // F-10: each call now has its own private directory, so collect the
+        // paths the calls report instead of globbing a fixed shared root.
+        $paths = [];
+        foreach ([$a, $b] as $result) {
+            foreach (['private_key_path', 'public_key_path'] as $field) {
+                $paths[] = $result['generated_key'][$field];
+                $this->cleanupPaths[] = $result['generated_key'][$field];
+            }
+            $this->cleanupPaths[] = dirname($result['generated_key']['private_key_path']);
         }
-        $this->assertCount(4, glob($keyDir . '/lpx005_vm*') ?: [], 'Each VM must get its own key pair on disk');
+        $this->assertCount(4, array_unique($paths), 'Each VM must get its own key pair on disk');
+        foreach ($paths as $path) {
+            $this->assertFileExists($path);
+        }
     }
 }

@@ -30,9 +30,9 @@ trait HttpClient
      */
     protected function buildCurlOptions(
         string $method,
-        string $url,
-        array  $params  = [],
-        array  $headers = [],
+        #[\SensitiveParameter] string $url,
+        #[\SensitiveParameter] array  $params  = [],
+        #[\SensitiveParameter] array  $headers = [],
     ): array {
         $options = [
             CURLOPT_RETURNTRANSFER => true,
@@ -50,16 +50,84 @@ trait HttpClient
             $options[CURLOPT_PINNEDPUBLICKEY] = $this->pinnedPublicKey;
         }
 
+        $hasFile = $this->containsUploadFile($params);
+
         if ($method === 'POST' || $method === 'PUT') {
-            $options[CURLOPT_URL]        = $url;
-            $options[CURLOPT_POSTFIELDS] = http_build_query($params);
+            $options[CURLOPT_URL] = $url;
+            // F-07: http_build_query() serialises a CURLFile's public properties
+            // ("filename[name]=/local/path"), leaking the path and never uploading
+            // the file. With a file present send an array so cURL builds a real
+            // multipart/form-data body; otherwise keep the urlencoded string.
+            $options[CURLOPT_POSTFIELDS] = $hasFile
+                ? $this->multipartFields($params)
+                : http_build_query($params);
         } else {
+            if ($hasFile) {
+                throw new \InvalidArgumentException('File uploads are only supported for POST and PUT requests.');
+            }
             $options[CURLOPT_URL] = empty($params)
                 ? $url
                 : $url . '?' . http_build_query($params);
         }
 
         return $options;
+    }
+
+    /**
+     * True when $value is, or (recursively) contains, a CURLFile / CURLStringFile.
+     */
+    private function containsUploadFile(mixed $value): bool
+    {
+        if ($value instanceof \CURLFile || $value instanceof \CURLStringFile) {
+            return true;
+        }
+
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                if ($this->containsUploadFile($item)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Flatten a payload into the single-level array cURL needs for multipart
+     * POSTFIELDS. Scalars follow http_build_query() semantics (null skipped,
+     * bool -> 1/0, nested arrays -> "a[b][c]"); upload files pass through.
+     *
+     * @param  array<array-key, mixed> $params
+     * @return array<string, mixed>
+     *
+     * @throws \InvalidArgumentException  For values that cannot be form fields
+     */
+    private function multipartFields(array $params, string $prefix = ''): array
+    {
+        $fields = [];
+
+        foreach ($params as $key => $value) {
+            $name = $prefix === '' ? (string) $key : $prefix . '[' . $key . ']';
+
+            if ($value === null) {
+                continue;
+            }
+
+            if ($value instanceof \CURLFile || $value instanceof \CURLStringFile) {
+                $fields[$name] = $value;
+            } elseif (is_array($value)) {
+                $fields += $this->multipartFields($value, $name);
+            } elseif (is_bool($value)) {
+                $fields[$name] = $value ? '1' : '0';
+            } elseif (is_scalar($value) || $value instanceof \Stringable) {
+                $fields[$name] = (string) $value;
+            } else {
+                throw new \InvalidArgumentException('Unsupported value type in multipart payload.');
+            }
+        }
+
+        return $fields;
     }
 
     /**
@@ -76,9 +144,9 @@ trait HttpClient
      */
     protected function sendRequest(
         string $method,
-        string $url,
-        array  $params  = [],
-        array  $headers = [],
+        #[\SensitiveParameter] string $url,
+        #[\SensitiveParameter] array  $params  = [],
+        #[\SensitiveParameter] array  $headers = [],
     ): array {
         $curl    = curl_init();
         $options = $this->buildCurlOptions($method, $url, $params, $headers);
@@ -94,12 +162,17 @@ trait HttpClient
         if ($response === false || $error !== '') {
             // LPX-006: carry the curl errno as the exception code so logs can
             // record a categorised failure without the raw diagnostic text.
-            throw new ConnectionException("Proxmox cURL error: {$error}", $errno);
+            // LPX-SAST-004: curl_error() embeds the target host/IP and local
+            // TLS/pin paths; curl_strerror() gives the same category with no
+            // endpoint detail. The errno is carried as the exception code.
+            $generic = function_exists('curl_strerror') ? (string) curl_strerror($errno) : 'transport failure';
+            throw new ConnectionException("Proxmox cURL error ({$errno}): {$generic}", $errno);
         }
 
         if ($httpCode >= 400) {
-            // Redact query string from logged URL (MED-2 fix)
-            $safeUrl = strtok($url, '?');
+            // Redact query string (MED-2) and, per LPX-SAST-004, scheme/host/port:
+            // log only the API path so uncaught exceptions never disclose the hypervisor.
+            $safeUrl = (string) (parse_url(strtok($url, '?'), PHP_URL_PATH) ?: '/');
             throw new ApiException(
                 "Proxmox API HTTP {$httpCode} for: {$safeUrl}",
                 $httpCode,
